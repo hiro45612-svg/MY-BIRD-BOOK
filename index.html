@@ -54,7 +54,7 @@ input[type=search]{min-width:220px;flex:1}
 .field{margin:12px 0}.field label{display:block;font-weight:700;font-size:13px;margin-bottom:5px}
 .placechecks{max-height:180px;overflow:auto;border:1px solid var(--line);padding:8px;border-radius:9px}
 .placechecks label{display:block;padding:5px}
-.photo-preview{width:100%;max-height:300px;object-fit:contain;background:#f1f3f2;border-radius:10px}
+.photo-preview{width:100%;max-height:300px;object-fit:contain;background:#f1f3f2;border-radius:10px}.photo-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}.photo-actions .btn{margin:0}.suggestbox{margin-top:8px;padding:10px 12px;background:#f4f7f5;border:1px solid #d5dfda;border-radius:10px;font-size:13px}.suggestbox b{display:block;margin-bottom:4px}.suggestbox button{margin-top:7px}
 .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
 @media(max-width:600px){.row{grid-template-columns:1fr}.photo{min-height:150px}.mapbox{padding:8px}}
 
@@ -110,18 +110,20 @@ input[type=search]{min-width:220px;flex:1}
 <div class="actions"><button class="btn secondary" id="authClose">閉じる</button><button class="btn secondary" id="authSignup">新規登録</button><button class="btn" id="authLogin">ログイン</button></div>
 <div id="authMessage" class="meta"></div></div></div>
 <div class="modal" id="birdModal"><div class="dialog"><h2 id="birdModalTitle">鳥を編集</h2>
-<div class="row"><div class="field"><label>鳥名</label><input id="bName" style="width:100%"></div><div class="field"><label>鳥類分類（目）</label><input id="bOrder" style="width:100%"></div></div>
+<div class="row"><div class="field"><label>鳥名</label><input id="bName" style="width:100%"><button type="button" class="btn secondary" id="birdSuggest" style="margin-top:7px">🧠 属性を提案</button></div><div class="field"><label>鳥類分類（目）</label><input id="bOrder" style="width:100%"></div></div>
 <div class="field"><label>留鳥／冬鳥／夏鳥／漂鳥</label><input id="bSeason" style="width:100%"></div>
+<div id="birdSuggestBox" class="suggestbox" style="display:none"></div>
 <div class="field"><label>見た場所（複数選択可）</label><div class="placechecks" id="placeChecks"></div></div>
 <div class="field"><label>写真登録日</label><input id="bDate" type="date"></div>
-<div class="field"><label>写真（1枚）</label><input id="bPhoto" type="file" accept="image/*"><div class="meta">Googleフォト等からPCにダウンロードした写真を選択できます。登録時に自動で軽量化します。</div></div>
+<div class="field"><label>写真（1枚）</label><input id="bPhoto" type="file" accept="image/*"><div class="meta">Googleフォト等からPCにダウンロードした写真を選択できます。登録時に自動で軽量化します。</div><div class="photo-actions"><button type="button" class="btn secondary" id="replacePhotoBtn">📷 写真を変更</button><button type="button" class="btn secondary" id="reuploadPhotoBtn" style="display:none">☁️ 写真を再同期</button><button type="button" class="btn secondary" id="deletePhotoBtn">🗑️ 写真を削除</button></div></div>
 <div id="currentPhoto"></div>
 <div class="field"><label>メモ</label><textarea id="bMemo" rows="4" style="width:100%" placeholder="撮影・観察したときのメモ"></textarea></div>
 <div class="actions"><button class="btn secondary" id="birdCancel">キャンセル</button><button class="btn" id="birdSave">保存</button></div>
 </div></div>
 
 <div class="modal" id="placeModal"><div class="dialog"><h2 id="placeModalTitle">行先を編集</h2>
-<div class="row"><div class="field"><label>場所名</label><input id="pName" style="width:100%"></div><div class="field"><label>都道府県</label><input id="pPref" style="width:100%"></div></div>
+<div class="row"><div class="field"><label>場所名</label><input id="pName" style="width:100%"><button type="button" class="btn secondary" id="placeSuggest" style="margin-top:7px">🧠 都道府県を提案</button></div><div class="field"><label>都道府県</label><input id="pPref" style="width:100%"></div></div>
+<div id="placeSuggestBox" class="suggestbox" style="display:none"></div>
 <div class="actions"><button class="btn secondary" id="placeCancel">キャンセル</button><button class="btn" id="placeSave">保存</button></div>
 </div></div>
 
@@ -228,9 +230,13 @@ async function syncCloud(){
 async function uploadPhoto(birdId,dataUrl){
  if(!currentUser||!dataUrl)return "";
  const blob=await (await fetch(dataUrl)).blob();
+ // 元ファイル名は使わず、鳥IDを固定した安全なパスに保存する。
+ // そのため「ファイル名がおかしい」こと自体は同期失敗の原因にならない。
  const path=currentUser.id+"/"+birdId+".jpg";
  const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).upload(path,blob,{contentType:"image/jpeg",upsert:true});
  if(error)throw error;
+ // 差し替え時に古いObject URLを再利用しない。
+ photoUrlCache.delete(path);
  return path;
 }
 function storagePathFromPhotoPath(p){
@@ -486,18 +492,115 @@ function fillChecks(sel=[]){
    </details>`;
  }).join("")+'</div>';
 }
-function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:"";fillChecks(b?.places||[]);openModal("birdModal")}
-function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";openModal("placeModal")}
-addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");
+const birdAttributeCatalog=new Map(initialBirds.map(b=>[b.鳥名,{order:b["鳥類分類（目）"],season:b["留鳥／冬鳥／夏鳥／漂鳥"]}]));
+// 初期48種以外でも、よく追加される野鳥はクリックだけで候補を出せるようにする。
+// 「ちゃぴこが提案」の役割は、アプリ内に持たせた確認済み候補を提示し、ユーザーが採用する方式。
+const extraBirdAttributes={
+  "シマエナガ":{order:"スズメ目",season:"留鳥（北海道）"},
+  "コガラ":{order:"スズメ目",season:"留鳥"},
+  "ヤマセミ":{order:"ブッポウソウ目",season:"留鳥"},
+  "アカショウビン":{order:"ブッポウソウ目",season:"夏鳥"},
+  "サンコウチョウ":{order:"スズメ目",season:"夏鳥"},
+  "キレンジャク":{order:"スズメ目",season:"冬鳥"},
+  "ヒレンジャク":{order:"スズメ目",season:"冬鳥"},
+  "ルリビタキ":{order:"スズメ目",season:"漂鳥・冬鳥"},
+  "ミソサザイ":{order:"スズメ目",season:"留鳥"},
+  "カワガラス":{order:"スズメ目",season:"留鳥"},
+  "アオゲラ":{order:"キツツキ目",season:"留鳥"},
+  "オオタカ":{order:"タカ目",season:"留鳥"},
+  "チョウゲンボウ":{order:"ハヤブサ目",season:"留鳥"},
+  "ハヤブサ":{order:"ハヤブサ目",season:"留鳥"},
+  "フクロウ":{order:"フクロウ目",season:"留鳥"},
+  "コミミズク":{order:"フクロウ目",season:"冬鳥"},
+  "シロハラ":{order:"スズメ目",season:"冬鳥"},
+  "アトリ":{order:"スズメ目",season:"冬鳥"},
+  "マヒワ":{order:"スズメ目",season:"冬鳥"},
+  "カワラバト":{order:"ハト目",season:"留鳥"}
+};
+Object.entries(extraBirdAttributes).forEach(([name,v])=>birdAttributeCatalog.set(name,v));
+const placeAttributeCatalog=new Map(initialPlaces.map(p=>[p.場所名,{pref:p.都道府県}]));
+const extraPlaceAttributes={
+  "座間谷戸山公園":"神奈川県",
+  "朝霧高原":"静岡県",
+  "戦場ヶ原":"栃木県（日光市）",
+  "西湖":"山梨県",
+  "富士山五合目":"山梨県",
+  "富士山五合目（須走口）":"静岡県",
+  "富士山五合目（富士宮口）":"静岡県",
+  "相模湖":"神奈川県",
+  "横浜市こども自然公園":"神奈川県",
+  "金沢自然公園":"神奈川県",
+  "県立四季の森公園":"神奈川県"
+};
+Object.entries(extraPlaceAttributes).forEach(([name,pref])=>placeAttributeCatalog.set(name,{pref}));
+function showBirdSuggestion(){
+ const name=bName.value.trim(),box=document.getElementById("birdSuggestBox");
+ if(!name){box.style.display="block";box.innerHTML="鳥名を入力すると、登録済みの分類データから候補を探します。";return;}
+ const live=data.birds.find(b=>b.鳥名===name);
+ const hit=live?{order:live["鳥類分類（目）"],season:live["留鳥／冬鳥／夏鳥／漂鳥"]}:birdAttributeCatalog.get(name);
+ if(hit){
+   box.style.display="block";
+   box.innerHTML=`<b>🧠 属性候補</b><div>目：${esc(hit.order)}</div><div>種別：${esc(hit.season)}</div><button type="button" class="btn secondary" id="applyBirdSuggestion">この候補を入力</button>`;
+   document.getElementById("applyBirdSuggestion").onclick=()=>{bOrder.value=hit.order;bSeason.value=hit.season;box.innerHTML=`<b>✓ 入力しました</b> ${esc(hit.order)} ／ ${esc(hit.season)}`};
+ }else{
+   box.style.display="block";
+   box.innerHTML=`<b>🧠 ちゃぴこ候補を作る</b><div>この鳥はアプリ内の候補表にありません。</div><div style="margin-top:5px">この場合は、ちゃぴこに「${esc(name)}の鳥類分類（目）と、留鳥・冬鳥・夏鳥・漂鳥の候補を教えて」と聞けば、確認してから登録できます。</div>`;
+ }
+}
+function showPlaceSuggestion(){
+ const name=pName.value.trim(),box=document.getElementById("placeSuggestBox");
+ if(!name){box.style.display="block";box.innerHTML="行先名を入力すると、登録済みの行先データから候補を探します。";return;}
+ const live=data.places.find(p=>p.場所名===name);
+ const hit=live?{pref:live.都道府県}:placeAttributeCatalog.get(name);
+ if(hit){
+   box.style.display="block";
+   box.innerHTML=`<b>🧠 都道府県候補</b><div>${esc(hit.pref)}</div><button type="button" class="btn secondary" id="applyPlaceSuggestion">この候補を入力</button>`;
+   document.getElementById("applyPlaceSuggestion").onclick=()=>{pPref.value=hit.pref;box.innerHTML=`<b>✓ 入力しました</b> ${esc(hit.pref)}`};
+ }else{
+   box.style.display="block";
+   box.innerHTML=`<b>🧠 ちゃぴこ候補を作る</b><div>この行先はアプリ内の候補表にありません。</div><div style="margin-top:5px">この場合は、ちゃぴこに「${esc(name)}の都道府県を教えて」と聞けば、確認してから登録できます。</div>`;
+ }
+}
+async function deleteBirdPhoto(b){
+ if(!b)return;
+ if(b.photoPath && currentUser){
+   const path=storagePathFromPhotoPath(b.photoPath);
+   if(path){
+     const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);
+     if(error)throw error;
+     photoUrlCache.delete(path);
+   }
+ }
+ b.photo="";b.photoPath="";b.photoDate="";b._photoUrl="";b.updatedAt=Date.now();
+ localStorage.setItem(KEY,JSON.stringify(data));
+ if(currentUser)await pushCloud();
+ render();
+}
+function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";document.getElementById("birdSuggestBox").style.display="none";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:(b?"<div class='meta'>写真はありません</div>":"");document.getElementById("replacePhotoBtn").style.display=b?"":"none";document.getElementById("reuploadPhotoBtn").style.display=(b&&currentUser&&b.photo)?"":"none";document.getElementById("deletePhotoBtn").style.display=(b&&(b.photo||b.photoPath))?"":"none";fillChecks(b?.places||[]);openModal("birdModal")}
+function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";document.getElementById("placeSuggestBox").style.display="none";openModal("placeModal")}
+addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");birdSuggest.onclick=showBirdSuggestion;placeSuggest.onclick=showPlaceSuggestion;replacePhotoBtn.onclick=()=>bPhoto.click();
+reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!currentUser||!b.photo)return;try{setStatus("☁️ 写真を再同期中…");b.photoPath=await uploadPhoto(b.id,b.photo);b.updatedAt=Date.now();b._photoUrl=await getCloudPhotoUrl(b);localStorage.setItem(KEY,JSON.stringify(data));await pushCloud();currentPhoto.innerHTML=b._photoUrl?`<img class="photo-preview" src="${esc(b._photoUrl)}">`:currentPhoto.innerHTML;setStatus("☁️ 写真を再同期しました","ok")}catch(e){alert("写真の再同期に失敗しました。\n"+e.message)}};
+deletePhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!(b.photo||b.photoPath))return;if(!confirm("この写真を削除しますか？"))return;try{await deleteBirdPhoto(b);closeModal("birdModal")}catch(e){alert("写真の削除に失敗しました。\n"+e.message)}};
 birdSave.onclick=async()=>{
  let file=bPhoto.files[0],id=window.editingBird||("b"+Date.now()),b=data.birds.find(x=>x.id===id);
  if(!b){b={id,鳥名:"",["鳥類分類（目）"]:"",["留鳥／冬鳥／夏鳥／漂鳥"]:"",places:[],photo:"",photoPath:"",photoDate:"",memo:"",updatedAt:0};data.birds.push(b)}
  b.鳥名=bName.value.trim();b["鳥類分類（目）"]=bOrder.value.trim();b["留鳥／冬鳥／夏鳥／漂鳥"]=bSeason.value.trim();
  b.places=[...document.querySelectorAll("#placeChecks input:checked")].map(x=>x.value);b.photoDate=bDate.value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();
  try{
-  if(file){const resized=await resizeBirdPhoto(file,1200,0.82);b.photo=resized;if(currentUser){setStatus("☁️ 写真をアップロード中…");b.photoPath=await uploadPhoto(b.id,resized);try{b._photoUrl=await getCloudPhotoUrl(b)}catch(e){}}}
+  if(file){
+    const resized=await resizeBirdPhoto(file,1200,0.82);
+    if(currentUser){
+      setStatus("☁️ 写真をアップロード中…");
+      const newPath=await uploadPhoto(b.id,resized);
+      b.photo=resized;
+      b.photoPath=newPath;
+      b._photoUrl=await getCloudPhotoUrl(b);
+    }else{
+      b.photo=resized;
+    }
+  }
   localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");
- }catch(e){alert("端末には保存しましたが、クラウド写真同期に失敗しました。\n"+e.message);localStorage.setItem(KEY,JSON.stringify(data));render();closeModal("birdModal")}
+ }catch(e){alert("写真の保存・クラウド同期に失敗しました。\n"+e.message+"\n\n写真は未確定のままなので、もう一度保存できます。");localStorage.setItem(KEY,JSON.stringify(data));render()}
 };
 placeSave.onclick=()=>{
  let p=data.places.find(x=>x.id===window.editingPlace);if(!p){p={id:"p"+Date.now(),場所名:"",都道府県:"",updatedAt:0};data.places.push(p)}
