@@ -152,9 +152,17 @@ function initSupabase(){
  if(!window.supabase||!window.MUSEUM_SUPABASE_URL||!window.MUSEUM_SUPABASE_PUBLISHABLE_KEY){setStatus("☁️ クラウド：設定待ち","warn");return false}
  supabaseClient=window.supabase.createClient(window.MUSEUM_SUPABASE_URL,window.MUSEUM_SUPABASE_PUBLISHABLE_KEY);return true;
 }
+function cloudPayload(){
+ // 写真本体(base64)はDBに入れず、StorageのURLだけを同期する。
+ // これにより写真を追加してもDBのサイズが膨らまない。
+ const payload=JSON.parse(JSON.stringify(data));
+ payload.birds=payload.birds.map(b=>({...b,photo:""}));
+ return payload;
+}
 async function pushCloud(){
  if(!currentUser)return;
- const {error}=await supabaseClient.from(CLOUD_TABLE).upsert({user_id:currentUser.id,records:data,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+ const payload=cloudPayload();
+ const {error}=await supabaseClient.from(CLOUD_TABLE).upsert({user_id:currentUser.id,records:payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
  if(error)throw error;
  setStatus(`☁️ 同期済み ${data.birds.length}種 / ${data.places.length}か所`,"ok");
 }
