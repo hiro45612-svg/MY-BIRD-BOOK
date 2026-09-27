@@ -133,7 +133,8 @@ const CLOUD_TABLE="bird_book_data";
 const PHOTO_BUCKET="bird-photos";
 let data=JSON.parse(localStorage.getItem(KEY)||"null");
 if(!data){data={birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoDate:"",memo:"",updatedAt:Date.now()})),places:initialPlaces.map((x,i)=>({...x,id:"p"+i,updatedAt:Date.now()}))};localStorage.setItem(KEY,JSON.stringify(data));}
-let selectedPref="",supabaseClient=null,currentUser=null,cloudReady=false;\nconst photoUrlCache=new Map();
+let selectedPref="",supabaseClient=null,currentUser=null,cloudReady=false;
+const photoUrlCache=new Map();
 
 function normalize(d){
  d=d&&typeof d==="object"?d:{birds:[],places:[]};
@@ -157,7 +158,8 @@ function merge(a,b){
        m.set(v.id,{
          ...winner,
          photoPath:winner.photoPath||other.photoPath||"",
-         photo:winner.photo||other.photo||"",\n         _photoUrl:winner._photoUrl||other._photoUrl||""
+         photo:winner.photo||other.photo||"",
+         _photoUrl:winner._photoUrl||other._photoUrl||""
        });
      }
    });
