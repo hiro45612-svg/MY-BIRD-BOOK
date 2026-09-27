@@ -135,7 +135,7 @@ const CLOUD_TABLE="bird_book_data";
 const PHOTO_BUCKET="bird-photos";
 let data=JSON.parse(localStorage.getItem(KEY)||"null");
 const makeInitialData=()=>({
- birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoPath:"",photoDate:"",memo:"",updatedAt:Date.now()})),
+ birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoPath:"",photoDate:"",memo:"",photoUpdatedAt:Date.now(),updatedAt:Date.now()})),
  places:initialPlaces.map((x,i)=>({...x,id:"p"+i,updatedAt:Date.now()}))
 });
 // 端末側に空データが残っていても、起動時に図鑑の初期データへ安全に復元する。
@@ -149,7 +149,7 @@ const photoUrlCache=new Map();
 
 function normalize(d){
  d=d&&typeof d==="object"?d:{birds:[],places:[]};
- d.birds=(d.birds||[]).map((b,i)=>({...b,id:b.id||"b"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||"",photoPath:b.photoPath||"",updatedAt:Number(b.updatedAt||0)}));
+ d.birds=(d.birds||[]).map((b,i)=>({...b,id:b.id||"b"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||"",photoPath:b.photoPath||"",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),updatedAt:Number(b.updatedAt||0)}));
  d.places=(d.places||[]).map((p,i)=>({...p,id:p.id||"p"+i,updatedAt:Number(p.updatedAt||0)}));
  return d;
 }
@@ -164,18 +164,27 @@ function merge(a,b){
    const m=new Map(x.map(v=>[v.id,v]));
    y.forEach(v=>{
      const old=m.get(v.id);
-     if(!old)m.set(v.id,v);
-     else{
-       const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
-       const other=winner===v?old:v;
-       // 写真情報は片方にしかない場合があるため、常に補完する。
-       m.set(v.id,{
-         ...winner,
-         photoPath:winner.photoPath||other.photoPath||"",
-         photo:winner.photo||other.photo||"",
-         _photoUrl:winner._photoUrl||other._photoUrl||""
-       });
+     if(!old){m.set(v.id,v);return;}
+     const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
+     const other=winner===v?old:v;
+     const base={...winner};
+     // 写真は鳥レコード全体とは別に更新時刻を持たせる。
+     // これにより「PCで写真を削除した後、スマホでメモだけ編集した」
+     // ような場合でも、古い写真が復活しない。
+     if("photo" in winner || "photoPath" in winner || "photoUpdatedAt" in winner){
+       const wt=Number(winner.photoUpdatedAt||0);
+       const ot=Number(other.photoUpdatedAt||0);
+       const pw=wt>=ot?winner:other;
+       const po=wt>=ot?other:winner;
+       base.photoUpdatedAt=Math.max(wt,ot);
+       base.photoPath=pw.photoPath||"";
+       // 同じStorageパスなら、端末側のbase64/object表示用情報を補完してよい。
+       // パスが変わった/削除された場合は古い写真を絶対に復活させない。
+       base.photo=(pw.photoPath && pw.photoPath===po.photoPath)?(pw.photo||po.photo||""):(pw.photo||"");
+       base._photoUrl=(pw.photoPath && pw.photoPath===po.photoPath)?(pw._photoUrl||po._photoUrl||""):(pw._photoUrl||"");
+       base.photoDate=pw.photoDate||"";
      }
+     m.set(v.id,base);
    });
    return [...m.values()];
  };
@@ -580,7 +589,7 @@ async function deleteBirdPhoto(b){
      photoUrlCache.delete(path);
    }
  }
- b.photo="";b.photoPath="";b.photoDate="";b._photoUrl="";b.updatedAt=Date.now();
+ b.photo="";b.photoPath="";b.photoDate="";b._photoUrl="";b.photoUpdatedAt=Date.now();b.updatedAt=Date.now();
  localStorage.setItem(KEY,JSON.stringify(data));
  if(currentUser)await pushCloud();
  render();
@@ -588,7 +597,7 @@ async function deleteBirdPhoto(b){
 function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";document.getElementById("birdSuggestBox").style.display="none";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:(b?"<div class='meta'>写真はありません</div>":"");document.getElementById("replacePhotoBtn").style.display=b?"":"none";document.getElementById("reuploadPhotoBtn").style.display=(b&&currentUser&&b.photo)?"":"none";document.getElementById("deletePhotoBtn").style.display=(b&&(b.photo||b.photoPath))?"":"none";fillChecks(b?.places||[]);openModal("birdModal")}
 function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";document.getElementById("placeSuggestBox").style.display="none";openModal("placeModal")}
 addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");birdSuggest.onclick=showBirdSuggestion;placeSuggest.onclick=showPlaceSuggestion;replacePhotoBtn.onclick=()=>bPhoto.click();
-reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!currentUser||!b.photo)return;try{setStatus("☁️ 写真を再同期中…");b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);b.updatedAt=Date.now();b._photoUrl=await getCloudPhotoUrl(b);localStorage.setItem(KEY,JSON.stringify(data));await pushCloud();currentPhoto.innerHTML=b._photoUrl?`<img class="photo-preview" src="${esc(b._photoUrl)}">`:currentPhoto.innerHTML;setStatus("☁️ 写真を再同期しました","ok")}catch(e){alert("写真の再同期に失敗しました。\n"+e.message)}};
+reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!currentUser||!b.photo)return;try{setStatus("☁️ 写真を再同期中…");b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);b.photoUpdatedAt=Date.now();b.updatedAt=Date.now();b._photoUrl=await getCloudPhotoUrl(b);localStorage.setItem(KEY,JSON.stringify(data));await pushCloud();currentPhoto.innerHTML=b._photoUrl?`<img class="photo-preview" src="${esc(b._photoUrl)}">`:currentPhoto.innerHTML;setStatus("☁️ 写真を再同期しました","ok")}catch(e){alert("写真の再同期に失敗しました。\n"+e.message)}};
 deletePhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!(b.photo||b.photoPath))return;if(!confirm("この写真を削除しますか？"))return;try{await deleteBirdPhoto(b);closeModal("birdModal")}catch(e){alert("写真の削除に失敗しました。\n"+e.message)}};
 birdSave.onclick=async()=>{
  let file=bPhoto.files[0],id=window.editingBird||("b"+Date.now()),b=data.birds.find(x=>x.id===id);
@@ -604,9 +613,12 @@ birdSave.onclick=async()=>{
       const newPath=await uploadPhoto(b.id,resized,oldPath);
       b.photo=resized;
       b.photoPath=newPath;
+      b.photoUpdatedAt=Date.now();
       b._photoUrl=await getCloudPhotoUrl(b);
     }else{
       b.photo=resized;
+      b.photoPath="";
+      b.photoUpdatedAt=Date.now();
     }
   }
   localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");
