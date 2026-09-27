@@ -132,7 +132,16 @@ const KEY="myBirdBook_v02";
 const CLOUD_TABLE="bird_book_data";
 const PHOTO_BUCKET="bird-photos";
 let data=JSON.parse(localStorage.getItem(KEY)||"null");
-if(!data){data={birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoDate:"",memo:"",updatedAt:Date.now()})),places:initialPlaces.map((x,i)=>({...x,id:"p"+i,updatedAt:Date.now()}))};localStorage.setItem(KEY,JSON.stringify(data));}
+const makeInitialData=()=>({
+ birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoPath:"",photoDate:"",memo:"",updatedAt:Date.now()})),
+ places:initialPlaces.map((x,i)=>({...x,id:"p"+i,updatedAt:Date.now()}))
+});
+// 端末側に空データが残っていても、起動時に図鑑の初期データへ安全に復元する。
+// クラウドにログインすると、48種/33か所のクラウドデータとmergeされる。
+if(!data || !Array.isArray(data.birds) || !Array.isArray(data.places) || (data.birds.length===0 && data.places.length===0)){
+ data=makeInitialData();
+ localStorage.setItem(KEY,JSON.stringify(data));
+}
 let selectedPref="",supabaseClient=null,currentUser=null,cloudReady=false;
 const photoUrlCache=new Map();
 
@@ -143,7 +152,10 @@ function normalize(d){
  return d;
 }
 data=normalize(data);
-function setStatus(t,c="",detail=""){cloudStatus.textContent=t;cloudStatus.className="cloudstatus "+c;if(detail)cloudStatus.title=detail}
+function setStatus(t,c="",detail=""){
+ const el=document.getElementById("cloudStatus");
+ if(el){el.textContent=t;el.className="cloudstatus "+c;if(detail)el.title=detail}
+}
 function save(){localStorage.setItem(KEY,JSON.stringify(data));if(currentUser&&cloudReady)pushCloud().catch(e=>setStatus("☁️ 同期エラー","warn",e.message))}
 function merge(a,b){
  const mergeList=(x,y)=>{
@@ -175,7 +187,7 @@ function cloudPayload(){
  // 写真本体(base64)はDBに入れず、StorageのURLだけを同期する。
  // これにより写真を追加してもDBのサイズが膨らまない。
  const payload=JSON.parse(JSON.stringify(data));
- payload.birds=payload.birds.map(b=>({...b,photo:""}));
+ payload.birds=payload.birds.map(b=>({...b,photo:"",_photoUrl:""}));
  return payload;
 }
 async function pushCloud(){
@@ -498,7 +510,22 @@ cloudSyncBtn.onclick=()=>syncCloud();
 cloudLogoutBtn.onclick=async()=>{await supabaseClient.auth.signOut();currentUser=null;cloudLogoutBtn.style.display="none";setStatus("☁️ クラウド：ログアウト")};
 authSignup.onclick=async()=>{const {error}=await supabaseClient.auth.signUp({email:authEmail.value.trim(),password:authPassword.value});authMessage.textContent=error?"登録エラー："+error.message:"登録しました。確認メールが必要な設定ならメールを確認してください。"};
 authLogin.onclick=async()=>{const {data:r,error}=await supabaseClient.auth.signInWithPassword({email:authEmail.value.trim(),password:authPassword.value});if(error){authMessage.textContent="ログインエラー："+error.message;return}currentUser=r.user;cloudReady=true;cloudLogoutBtn.style.display="";closeModal("authModal");await syncCloud()};
-async function bootCloud(){if(!initSupabase())return;const {data:r}=await supabaseClient.auth.getSession();if(r?.session){currentUser=r.session.user;cloudReady=true;cloudLogoutBtn.style.display="";await syncCloud();await hydrateCloudPhotos()}else setStatus("☁️ クラウド：未ログイン")}
+async function bootCloud(){
+ try{
+  if(!initSupabase())return;
+  const {data:r,error}=await supabaseClient.auth.getSession();
+  if(error)throw error;
+  if(r?.session){
+    currentUser=r.session.user;cloudReady=true;
+    document.getElementById("cloudLogoutBtn").style.display="";
+    await syncCloud();
+    await hydrateCloudPhotos();
+  }else setStatus("☁️ クラウド：未ログイン");
+ }catch(e){
+  console.error("MY BIRD BOOK bootCloud:",e);
+  setStatus("☁️ クラウド：未接続","warn",e.message);
+ }
+}
 bootCloud();
 render();
 </script>
