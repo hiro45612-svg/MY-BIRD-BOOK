@@ -213,7 +213,7 @@ async function syncCloud(){
    for(const b of data.birds){
      if(b.photo && !b.photoPath){
        setStatus(`☁️ 写真を移行中… ${b.鳥名}`);
-       b.photoPath=await uploadPhoto(b.id,b.photo);
+       b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);
        migrated=true;
      }
    }
@@ -227,16 +227,25 @@ async function syncCloud(){
    setStatus("☁️ クラウド同期エラー","warn",e.message);
  }
 }
-async function uploadPhoto(birdId,dataUrl){
+async function uploadPhoto(birdId,dataUrl,oldPath=""){
  if(!currentUser||!dataUrl)return "";
  const blob=await (await fetch(dataUrl)).blob();
- // 元ファイル名は使わず、鳥IDを固定した安全なパスに保存する。
- // そのため「ファイル名がおかしい」こと自体は同期失敗の原因にならない。
- const path=currentUser.id+"/"+birdId+".jpg";
- const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).upload(path,blob,{contentType:"image/jpeg",upsert:true});
+ // 写真を差し替えるたびに一意なStorageパスを作る。
+ // 同じ鳥ID.jpgを上書きしないことで、CDN/ブラウザ側の古い画像キャッシュを避ける。
+ const stamp=Date.now().toString(36);
+ const path=currentUser.id+"/"+birdId+"_"+stamp+".jpg";
+ const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).upload(path,blob,{contentType:"image/jpeg",upsert:false});
  if(error)throw error;
- // 差し替え時に古いObject URLを再利用しない。
  photoUrlCache.delete(path);
+ // 新しい写真の保存が成功してから、古い写真を削除する。
+ if(oldPath){
+   const old=storagePathFromPhotoPath(oldPath);
+   if(old && old!==path){
+     const {error:removeError}=await supabaseClient.storage.from(PHOTO_BUCKET).remove([old]);
+     if(removeError)console.warn("old photo remove failed:",removeError.message);
+     photoUrlCache.delete(old);
+   }
+ }
  return path;
 }
 function storagePathFromPhotoPath(p){
@@ -579,7 +588,7 @@ async function deleteBirdPhoto(b){
 function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";document.getElementById("birdSuggestBox").style.display="none";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:(b?"<div class='meta'>写真はありません</div>":"");document.getElementById("replacePhotoBtn").style.display=b?"":"none";document.getElementById("reuploadPhotoBtn").style.display=(b&&currentUser&&b.photo)?"":"none";document.getElementById("deletePhotoBtn").style.display=(b&&(b.photo||b.photoPath))?"":"none";fillChecks(b?.places||[]);openModal("birdModal")}
 function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";document.getElementById("placeSuggestBox").style.display="none";openModal("placeModal")}
 addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");birdSuggest.onclick=showBirdSuggestion;placeSuggest.onclick=showPlaceSuggestion;replacePhotoBtn.onclick=()=>bPhoto.click();
-reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!currentUser||!b.photo)return;try{setStatus("☁️ 写真を再同期中…");b.photoPath=await uploadPhoto(b.id,b.photo);b.updatedAt=Date.now();b._photoUrl=await getCloudPhotoUrl(b);localStorage.setItem(KEY,JSON.stringify(data));await pushCloud();currentPhoto.innerHTML=b._photoUrl?`<img class="photo-preview" src="${esc(b._photoUrl)}">`:currentPhoto.innerHTML;setStatus("☁️ 写真を再同期しました","ok")}catch(e){alert("写真の再同期に失敗しました。\n"+e.message)}};
+reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!currentUser||!b.photo)return;try{setStatus("☁️ 写真を再同期中…");b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);b.updatedAt=Date.now();b._photoUrl=await getCloudPhotoUrl(b);localStorage.setItem(KEY,JSON.stringify(data));await pushCloud();currentPhoto.innerHTML=b._photoUrl?`<img class="photo-preview" src="${esc(b._photoUrl)}">`:currentPhoto.innerHTML;setStatus("☁️ 写真を再同期しました","ok")}catch(e){alert("写真の再同期に失敗しました。\n"+e.message)}};
 deletePhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!(b.photo||b.photoPath))return;if(!confirm("この写真を削除しますか？"))return;try{await deleteBirdPhoto(b);closeModal("birdModal")}catch(e){alert("写真の削除に失敗しました。\n"+e.message)}};
 birdSave.onclick=async()=>{
  let file=bPhoto.files[0],id=window.editingBird||("b"+Date.now()),b=data.birds.find(x=>x.id===id);
@@ -591,7 +600,8 @@ birdSave.onclick=async()=>{
     const resized=await resizeBirdPhoto(file,1200,0.82);
     if(currentUser){
       setStatus("☁️ 写真をアップロード中…");
-      const newPath=await uploadPhoto(b.id,resized);
+      const oldPath=b.photoPath;
+      const newPath=await uploadPhoto(b.id,resized,oldPath);
       b.photo=resized;
       b.photoPath=newPath;
       b._photoUrl=await getCloudPhotoUrl(b);
