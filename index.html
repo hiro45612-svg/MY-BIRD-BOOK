@@ -145,7 +145,24 @@ data=normalize(data);
 function setStatus(t,c="",detail=""){cloudStatus.textContent=t;cloudStatus.className="cloudstatus "+c;if(detail)cloudStatus.title=detail}
 function save(){localStorage.setItem(KEY,JSON.stringify(data));if(currentUser&&cloudReady)pushCloud().catch(e=>setStatus("☁️ 同期エラー","warn",e.message))}
 function merge(a,b){
- const mergeList=(x,y)=>{const m=new Map(x.map(v=>[v.id,v]));y.forEach(v=>{if(!m.has(v.id)||Number(v.updatedAt||0)>Number(m.get(v.id).updatedAt||0))m.set(v.id,v)});return [...m.values()]};
+ const mergeList=(x,y)=>{
+   const m=new Map(x.map(v=>[v.id,v]));
+   y.forEach(v=>{
+     const old=m.get(v.id);
+     if(!old)m.set(v.id,v);
+     else{
+       const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
+       const other=winner===v?old:v;
+       // 写真情報は片方にしかない場合があるため、常に補完する。
+       m.set(v.id,{
+         ...winner,
+         photoPath:winner.photoPath||other.photoPath||"",
+         photo:winner.photo||other.photo||""
+       });
+     }
+   });
+   return [...m.values()];
+ };
  return {birds:mergeList(a.birds,b.birds),places:mergeList(a.places,b.places)};
 }
 function initSupabase(){
@@ -169,11 +186,30 @@ async function pushCloud(){
 async function syncCloud(){
  if(!currentUser)return;
  setStatus("☁️ 同期中…");
- const {data:row,error}=await supabaseClient.from(CLOUD_TABLE).select("records").eq("user_id",currentUser.id).maybeSingle();
- if(error){setStatus("☁️ 同期エラー","warn",error.message);return}
- if(row?.records)data=normalize(merge(normalize(data),normalize(row.records)));
- localStorage.setItem(KEY,JSON.stringify(data));
- await pushCloud();render();
+ try{
+   const {data:row,error}=await supabaseClient.from(CLOUD_TABLE).select("records").eq("user_id",currentUser.id).maybeSingle();
+   if(error)throw error;
+   if(row?.records)data=normalize(merge(normalize(data),normalize(row.records)));
+
+   // 既存localStorage写真を初回同期時にStorageへ移行する。
+   // PC側に写真が残っていてphotoPathが無い場合も、ここでクラウド化する。
+   let migrated=false;
+   for(const b of data.birds){
+     if(b.photo && !b.photoPath){
+       setStatus(`☁️ 写真を移行中… ${b.鳥名}`);
+       b.photoPath=await uploadPhoto(b.id,b.photo);
+       migrated=true;
+     }
+   }
+
+   localStorage.setItem(KEY,JSON.stringify(data));
+   await pushCloud();
+   render();
+   if(migrated)setStatus(`☁️ 同期済み ${data.birds.length}種 / ${data.places.length}か所`,"ok");
+ }catch(e){
+   console.error("MY BIRD BOOK sync:",e);
+   setStatus("☁️ クラウド同期エラー","warn",e.message);
+ }
 }
 async function uploadPhoto(birdId,dataUrl){
  if(!currentUser||!dataUrl)return "";
@@ -196,7 +232,7 @@ function prefCodesForPlace(p){
   }
   return codes;
 }
-function render(){birdCount.textContent=data.birds.length;placeCount.textContent=data.places.length;photoCount.textContent=data.birds.filter(x=>x.photo).length;renderBirds();renderPlaces();loadMap()}
+function render(){birdCount.textContent=data.birds.length;placeCount.textContent=data.places.length;photoCount.textContent=data.birds.filter(x=>x.photo||x.photoPath).length;renderBirds();renderPlaces();loadMap()}
 function renderBirds(){
  let q=birdSearch.value.trim().toLowerCase(),el=birdGrid;
  let arr=data.birds.filter(b=>(b.鳥名+" "+b["鳥類分類（目）"]+" "+b["留鳥／冬鳥／夏鳥／漂鳥"]).toLowerCase().includes(q));
@@ -333,7 +369,7 @@ function exportReboot(){
 `;
  data.birds.forEach(b=>{
    const places=b.places.map(id=>data.places.find(p=>p.id===id)?.場所名).filter(Boolean);
-   md+=`\n### ${b.鳥名}\n- 目：${b["鳥類分類（目）"]||"未登録"}\n- 種別：${b["留鳥／冬鳥／夏鳥／漂鳥"]||"未登録"}\n- 見た場所：${places.length?places.join("、"):"未登録"}\n- 写真：${b.photo?"あり":"なし"}\n- メモ：${b.memo||"なし"}\n`;
+   md+=`\n### ${b.鳥名}\n- 目：${b["鳥類分類（目）"]||"未登録"}\n- 種別：${b["留鳥／冬鳥／夏鳥／漂鳥"]||"未登録"}\n- 見た場所：${places.length?places.join("、"):"未登録"}\n- 写真：${(b.photo||b.photoPath)?"あり":"なし"}\n- メモ：${b.memo||"なし"}\n`;
  });
  md+=`\n## 行先（都道府県別）\n`;
  Object.keys(byPref).sort((a,b)=>a.localeCompare(b,"ja")).forEach(pref=>{
@@ -402,7 +438,7 @@ function fillChecks(sel=[]){
    </details>`;
  }).join("")+'</div>';
 }
-function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";currentPhoto.innerHTML=b?.photo?`<img class="photo-preview" src="${b.photo}">`:"";fillChecks(b?.places||[]);openModal("birdModal")}
+function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";currentPhoto.innerHTML=(b?.photoPath||b?.photo)?`<img class="photo-preview" src="${esc(b.photoPath||b.photo)}">`:"";fillChecks(b?.places||[]);openModal("birdModal")}
 function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";openModal("placeModal")}
 addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");
 birdSave.onclick=async()=>{
