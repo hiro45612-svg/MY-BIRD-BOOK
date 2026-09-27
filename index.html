@@ -135,7 +135,7 @@ const CLOUD_TABLE="bird_book_data";
 const PHOTO_BUCKET="bird-photos";
 let data=JSON.parse(localStorage.getItem(KEY)||"null");
 const makeInitialData=()=>({
- birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoPath:"",photoDate:"",memo:"",photoUpdatedAt:Date.now(),updatedAt:Date.now()})),
+ birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoPath:"",photoDate:"",memo:"",photoUpdatedAt:Date.now(),photoDeletedAt:0,updatedAt:Date.now()})),
  places:initialPlaces.map((x,i)=>({...x,id:"p"+i,updatedAt:Date.now()}))
 });
 // 端末側に空データが残っていても、起動時に図鑑の初期データへ安全に復元する。
@@ -149,8 +149,9 @@ const photoUrlCache=new Map();
 
 function normalize(d){
  d=d&&typeof d==="object"?d:{birds:[],places:[]};
- d.birds=(d.birds||[]).map((b,i)=>({...b,id:b.id||"b"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||"",photoPath:b.photoPath||"",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),updatedAt:Number(b.updatedAt||0)}));
+ d.birds=(d.birds||[]).map((b,i)=>({...b,id:b.id||"b"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||"",photoPath:b.photoPath||"",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),updatedAt:Number(b.updatedAt||0)}));
  d.places=(d.places||[]).map((p,i)=>({...p,id:p.id||"p"+i,updatedAt:Number(p.updatedAt||0)}));
+ d.birds.forEach(b=>{ if(!b.photoPath && !b.photo){ b._photoUrl=""; } });
  return d;
 }
 data=normalize(data);
@@ -176,13 +177,21 @@ function merge(a,b){
        const ot=Number(other.photoUpdatedAt||0);
        const pw=wt>=ot?winner:other;
        const po=wt>=ot?other:winner;
-       base.photoUpdatedAt=Math.max(wt,ot);
+       base.photoUpdatedAt=wt;
+       base.photoDeletedAt=Number(pw.photoDeletedAt||0);
        base.photoPath=pw.photoPath||"";
-       // 同じStorageパスなら、端末側のbase64/object表示用情報を補完してよい。
-       // パスが変わった/削除された場合は古い写真を絶対に復活させない。
-       base.photo=(pw.photoPath && pw.photoPath===po.photoPath)?(pw.photo||po.photo||""):(pw.photo||"");
-       base._photoUrl=(pw.photoPath && pw.photoPath===po.photoPath)?(pw._photoUrl||po._photoUrl||""):(pw._photoUrl||"");
-       base.photoDate=pw.photoDate||"";
+       // 写真状態は photoUpdatedAt の新しい側を完全に採用する。
+       // 削除には photoDeletedAt という「墓標」を残し、別端末の古い写真を復活させない。
+       if(base.photoDeletedAt>=wt && !pw.photoPath){
+         base.photo="";
+         base.photoPath="";
+         base._photoUrl="";
+         base.photoDate="";
+       }else{
+         base.photo=pw.photo||"";
+         base._photoUrl=pw._photoUrl||"";
+         base.photoDate=pw.photoDate||"";
+       }
      }
      m.set(v.id,base);
    });
@@ -589,7 +598,7 @@ async function deleteBirdPhoto(b){
      photoUrlCache.delete(path);
    }
  }
- b.photo="";b.photoPath="";b.photoDate="";b._photoUrl="";b.photoUpdatedAt=Date.now();b.updatedAt=Date.now();
+ b.photo="";b.photoPath="";b.photoDate="";b._photoUrl="";b.photoUpdatedAt=Date.now();b.photoDeletedAt=b.photoUpdatedAt;b.updatedAt=b.photoUpdatedAt;
  localStorage.setItem(KEY,JSON.stringify(data));
  if(currentUser)await pushCloud();
  render();
@@ -601,7 +610,7 @@ reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.edit
 deletePhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!(b.photo||b.photoPath))return;if(!confirm("この写真を削除しますか？"))return;try{await deleteBirdPhoto(b);closeModal("birdModal")}catch(e){alert("写真の削除に失敗しました。\n"+e.message)}};
 birdSave.onclick=async()=>{
  let file=bPhoto.files[0],id=window.editingBird||("b"+Date.now()),b=data.birds.find(x=>x.id===id);
- if(!b){b={id,鳥名:"",["鳥類分類（目）"]:"",["留鳥／冬鳥／夏鳥／漂鳥"]:"",places:[],photo:"",photoPath:"",photoDate:"",memo:"",updatedAt:0};data.birds.push(b)}
+ if(!b){b={id,鳥名:"",["鳥類分類（目）"]:"",["留鳥／冬鳥／夏鳥／漂鳥"]:"",places:[],photo:"",photoPath:"",photoDate:"",memo:"",photoUpdatedAt:0,photoDeletedAt:0,updatedAt:0};data.birds.push(b)}
  b.鳥名=bName.value.trim();b["鳥類分類（目）"]=bOrder.value.trim();b["留鳥／冬鳥／夏鳥／漂鳥"]=bSeason.value.trim();
  b.places=[...document.querySelectorAll("#placeChecks input:checked")].map(x=>x.value);b.photoDate=bDate.value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();
  try{
@@ -614,11 +623,13 @@ birdSave.onclick=async()=>{
       b.photo=resized;
       b.photoPath=newPath;
       b.photoUpdatedAt=Date.now();
+      b.photoDeletedAt=0;
       b._photoUrl=await getCloudPhotoUrl(b);
     }else{
       b.photo=resized;
       b.photoPath="";
       b.photoUpdatedAt=Date.now();
+      b.photoDeletedAt=0;
     }
   }
   localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");
