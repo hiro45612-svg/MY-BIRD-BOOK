@@ -133,7 +133,7 @@ const CLOUD_TABLE="bird_book_data";
 const PHOTO_BUCKET="bird-photos";
 let data=JSON.parse(localStorage.getItem(KEY)||"null");
 if(!data){data={birds:initialBirds.map((x,i)=>({...x,id:"b"+i,places:[],photo:"",photoDate:"",memo:"",updatedAt:Date.now()})),places:initialPlaces.map((x,i)=>({...x,id:"p"+i,updatedAt:Date.now()}))};localStorage.setItem(KEY,JSON.stringify(data));}
-let selectedPref="",supabaseClient=null,currentUser=null,cloudReady=false;
+let selectedPref="",supabaseClient=null,currentUser=null,cloudReady=false;\nconst photoUrlCache=new Map();
 
 function normalize(d){
  d=d&&typeof d==="object"?d:{birds:[],places:[]};
@@ -157,7 +157,7 @@ function merge(a,b){
        m.set(v.id,{
          ...winner,
          photoPath:winner.photoPath||other.photoPath||"",
-         photo:winner.photo||other.photo||""
+         photo:winner.photo||other.photo||"",\n         _photoUrl:winner._photoUrl||other._photoUrl||""
        });
      }
    });
@@ -217,7 +217,41 @@ async function uploadPhoto(birdId,dataUrl){
  const path=currentUser.id+"/"+birdId+".jpg";
  const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).upload(path,blob,{contentType:"image/jpeg",upsert:true});
  if(error)throw error;
- return supabaseClient.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
+ return path;
+}
+function storagePathFromPhotoPath(p){
+ if(!p)return "";
+ try{
+   const u=new URL(p,location.href);
+   const marker="/storage/v1/object/public/"+PHOTO_BUCKET+"/";
+   const i=u.pathname.indexOf(marker);
+   if(i>=0)return decodeURIComponent(u.pathname.slice(i+marker.length));
+ }catch(e){}
+ return p;
+}
+async function getCloudPhotoUrl(b){
+ if(!currentUser||!b.photoPath)return "";
+ const path=storagePathFromPhotoPath(b.photoPath);
+ if(!path)return "";
+ if(photoUrlCache.has(path))return photoUrlCache.get(path);
+ const {data,error}=await supabaseClient.storage.from(PHOTO_BUCKET).download(path);
+ if(error)throw error;
+ const url=URL.createObjectURL(data);
+ photoUrlCache.set(path,url);
+ return url;
+}
+async function hydrateCloudPhotos(){
+ if(!currentUser)return;
+ let changed=false;
+ for(const b of data.birds){
+   if(b.photoPath){
+     try{
+       const url=await getCloudPhotoUrl(b);
+       if(url){b._photoUrl=url;changed=true}
+     }catch(e){console.warn("photo load failed",b.鳥名,e.message)}
+   }
+ }
+ if(changed)render();
 }
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
 
@@ -239,7 +273,7 @@ function renderBirds(){
  let groups={};arr.forEach(b=>(groups[b["鳥類分類（目）"]||"分類未登録"]??=[]).push(b));
  el.innerHTML=Object.keys(groups).sort((a,b)=>a.localeCompare(b,"ja")).map(k=>`<section class="group"><h2 class="group-title">${esc(k)} <span>${groups[k].length}種</span></h2><div class="grid">${groups[k].map(birdCard).join("")}</div></section>`).join("")||`<div class="empty">該当する鳥がありません。</div>`;
 }
-function birdCard(b){let names=b.places.map(id=>data.places.find(p=>p.id===id)?.場所名).filter(Boolean);return `<article class="card"><div class="photo">${(b.photo||b.photoPath)?`<img src="${esc(b.photoPath||b.photo)}">`:"🐦"}</div><div class="body"><h3>${esc(b.鳥名)}</h3><div class="meta">${esc(b["鳥類分類（目）"])} ／ ${esc(b["留鳥／冬鳥／夏鳥／漂鳥"])}${b.photoDate?`<br>写真登録：${esc(b.photoDate)}`:""}</div><div class="tags">${names.map(n=>`<span class="tag">📍 ${esc(n)}</span>`).join("")}</div>${b.memo?`<div class="meta" style="margin-top:8px">${esc(b.memo)}</div>`:""}<button class="btn secondary" onclick="editBird('${b.id}')">編集</button><button class="btn secondary" onclick="birdChat('${b.id}')">🧠 ちゃぴこと壁打ち</button></div></article>`}
+function birdCard(b){let names=b.places.map(id=>data.places.find(p=>p.id===id)?.場所名).filter(Boolean);return `<article class="card"><div class="photo">${(b._photoUrl||b.photo||b.photoPath)?`<img src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:"🐦"}</div><div class="body"><h3>${esc(b.鳥名)}</h3><div class="meta">${esc(b["鳥類分類（目）"])} ／ ${esc(b["留鳥／冬鳥／夏鳥／漂鳥"])}${b.photoDate?`<br>写真登録：${esc(b.photoDate)}`:""}</div><div class="tags">${names.map(n=>`<span class="tag">📍 ${esc(n)}</span>`).join("")}</div>${b.memo?`<div class="meta" style="margin-top:8px">${esc(b.memo)}</div>`:""}<button class="btn secondary" onclick="editBird('${b.id}')">編集</button><button class="btn secondary" onclick="birdChat('${b.id}')">🧠 ちゃぴこと壁打ち</button></div></article>`}
 function renderPlaces(){
  let q=placeSearch.value.trim().toLowerCase(),el=placeGrid;
  let arr=data.places.filter(p=>(p.場所名+" "+p.都道府県).toLowerCase().includes(q));
@@ -438,7 +472,7 @@ function fillChecks(sel=[]){
    </details>`;
  }).join("")+'</div>';
 }
-function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";currentPhoto.innerHTML=(b?.photoPath||b?.photo)?`<img class="photo-preview" src="${esc(b.photoPath||b.photo)}">`:"";fillChecks(b?.places||[]);openModal("birdModal")}
+function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:"";fillChecks(b?.places||[]);openModal("birdModal")}
 function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";openModal("placeModal")}
 addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");
 birdSave.onclick=async()=>{
@@ -447,7 +481,7 @@ birdSave.onclick=async()=>{
  b.鳥名=bName.value.trim();b["鳥類分類（目）"]=bOrder.value.trim();b["留鳥／冬鳥／夏鳥／漂鳥"]=bSeason.value.trim();
  b.places=[...document.querySelectorAll("#placeChecks input:checked")].map(x=>x.value);b.photoDate=bDate.value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();
  try{
-  if(file){const resized=await resizeBirdPhoto(file,1200,0.82);b.photo=resized;if(currentUser){setStatus("☁️ 写真をアップロード中…");b.photoPath=await uploadPhoto(b.id,resized)}}
+  if(file){const resized=await resizeBirdPhoto(file,1200,0.82);b.photo=resized;if(currentUser){setStatus("☁️ 写真をアップロード中…");b.photoPath=await uploadPhoto(b.id,resized);try{b._photoUrl=await getCloudPhotoUrl(b)}catch(e){}}}
   localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");
  }catch(e){alert("端末には保存しましたが、クラウド写真同期に失敗しました。\n"+e.message);localStorage.setItem(KEY,JSON.stringify(data));render();closeModal("birdModal")}
 };
@@ -462,7 +496,7 @@ cloudSyncBtn.onclick=()=>syncCloud();
 cloudLogoutBtn.onclick=async()=>{await supabaseClient.auth.signOut();currentUser=null;cloudLogoutBtn.style.display="none";setStatus("☁️ クラウド：ログアウト")};
 authSignup.onclick=async()=>{const {error}=await supabaseClient.auth.signUp({email:authEmail.value.trim(),password:authPassword.value});authMessage.textContent=error?"登録エラー："+error.message:"登録しました。確認メールが必要な設定ならメールを確認してください。"};
 authLogin.onclick=async()=>{const {data:r,error}=await supabaseClient.auth.signInWithPassword({email:authEmail.value.trim(),password:authPassword.value});if(error){authMessage.textContent="ログインエラー："+error.message;return}currentUser=r.user;cloudReady=true;cloudLogoutBtn.style.display="";closeModal("authModal");await syncCloud()};
-async function bootCloud(){if(!initSupabase())return;const {data:r}=await supabaseClient.auth.getSession();if(r?.session){currentUser=r.session.user;cloudReady=true;cloudLogoutBtn.style.display="";await syncCloud()}else setStatus("☁️ クラウド：未ログイン")}
+async function bootCloud(){if(!initSupabase())return;const {data:r}=await supabaseClient.auth.getSession();if(r?.session){currentUser=r.session.user;cloudReady=true;cloudLogoutBtn.style.display="";await syncCloud();await hydrateCloudPhotos()}else setStatus("☁️ クラウド：未ログイン")}
 bootCloud();
 render();
 </script>
