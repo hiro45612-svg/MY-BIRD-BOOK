@@ -188,8 +188,8 @@ function merge(a,b){
          base._photoUrl="";
          base.photoDate="";
        }else{
-         base.photo=pw.photo||"";
-         base._photoUrl=pw._photoUrl||"";
+         base.photo=pw.photo||po.photo||"";
+         base._photoUrl=pw._photoUrl||po._photoUrl||"";
          base.photoDate=pw.photoDate||"";
        }
      }
@@ -288,33 +288,49 @@ async function getCloudPhotoUrl(b){
  return url;
 }
 async function repairBrokenPhotos(){
- if(!currentUser)return;
+ if(!currentUser||!supabaseClient)return;
  setStatus("🛠️ 写真を確認中…");
- let repaired=0, checked=0;
- for(const b of data.birds){
-   if(!b.photo)continue;
-   checked++;
-   let ok=false;
-   if(b.photoPath){
-     try{ const u=await getCloudPhotoUrl(b); ok=!!u; }catch(e){ ok=false; }
+ let repaired=0, checked=0, missing=0;
+ try{
+   const prefix=currentUser.id+"/";
+   const {data:objects,error}=await supabaseClient.storage.from(PHOTO_BUCKET).list(prefix,{limit:1000,sortBy:{column:"name",order:"desc"}});
+   if(error)throw error;
+   const files=(objects||[]).filter(o=>o&&o.name&&/\.jpg$/i.test(o.name));
+   const byBird=new Map();
+   for(const o of files){
+     const m=o.name.match(/^(b[^_\/]+)_([0-9a-z]+)\.jpg$/i);
+     if(!m)continue;
+     const birdId=m[1];
+     const path=prefix+o.name;
+     if(!byBird.has(birdId))byBird.set(birdId,path); // sorted desc => newest first
    }
-   if(ok)continue;
-   try{
-     const oldPath=b.photoPath;
-     const newPath=await uploadPhoto(b.id,b.photo,oldPath);
-     b.photoPath=newPath;
-     b.photoUpdatedAt=Date.now();
+   for(const b of data.birds){
+     const candidate=byBird.get(b.id);
+     if(!candidate)continue;
+     checked++;
+     let ok=false;
+     if(b.photoPath){
+       try{ ok=!!(await getCloudPhotoUrl(b)); }catch(e){ ok=false; }
+     }
+     if(ok)continue;
+     // A valid Storage object exists for this bird. Re-point the bird to it.
+     b.photoPath=candidate;
+     b.photoUpdatedAt=Math.max(Number(b.photoUpdatedAt||0),Date.now());
      b.photoDeletedAt=0;
      b.updatedAt=Date.now();
-     b._photoUrl=await getCloudPhotoUrl(b);
+     try{ b._photoUrl=await getCloudPhotoUrl(b); }catch(e){ b._photoUrl=""; }
      repaired++;
      setStatus(`🛠️ 写真を修復中… ${repaired}件`);
-   }catch(e){ console.warn("photo repair failed",b.鳥名,e.message); }
+   }
+   localStorage.setItem(KEY,JSON.stringify(data));
+   if(repaired)await pushCloud();
+   render();
+   setStatus(repaired?`☁️ 写真を${repaired}件修復しました`:`☁️ 修復対象はありません（Storage確認 ${checked}件）`,"ok");
+ }catch(e){
+   console.error("MY BIRD BOOK photo repair:",e);
+   setStatus("☁️ 写真修復エラー","warn",e.message);
+   alert("写真の修復確認に失敗しました。\n"+e.message);
  }
- localStorage.setItem(KEY,JSON.stringify(data));
- if(repaired)await pushCloud();
- render();
- setStatus(repaired?`☁️ 写真を${repaired}件修復しました`:"☁️ 修復対象の写真はありません","ok");
 }
 
 async function hydrateCloudPhotos(){
