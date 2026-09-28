@@ -280,10 +280,14 @@ async function getCloudPhotoUrl(b){
  if(!currentUser||!b.photoPath)return "";
  const path=storagePathFromPhotoPath(b.photoPath);
  if(!path)return "";
+ // v2.6: Storageの公開URLをそのまま使う。
+ // download→ObjectURL方式では、データ取得は成功しても表示側で画像が壊れるケースがあるため、
+ // 公開バケットの安定したURLを利用する。
  if(photoUrlCache.has(path))return photoUrlCache.get(path);
- const {data,error}=await supabaseClient.storage.from(PHOTO_BUCKET).download(path);
+ const {data,error}=supabaseClient.storage.from(PHOTO_BUCKET).getPublicUrl(path);
  if(error)throw error;
- const url=URL.createObjectURL(data);
+ const url=data?.publicUrl||"";
+ if(!url)throw new Error("Storage公開URLを取得できませんでした");
  photoUrlCache.set(path,url);
  return url;
 }
@@ -325,7 +329,7 @@ async function repairBrokenPhotos(){
       if(!b.photoPath)continue;
       checked++;
       let ok=false;
-      try{ ok=!!(await getCloudPhotoUrl(b)); }catch(e){ ok=false; }
+      try{ const checkedUrl=await getCloudPhotoUrl(b); ok=!!checkedUrl; if(ok)b._photoUrl=checkedUrl; }catch(e){ ok=false; }
       if(ok){continue;}
       broken++;
       const candidate=byBird.get(b.id);
