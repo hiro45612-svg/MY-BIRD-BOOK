@@ -118,7 +118,7 @@ input[type=search]{min-width:220px;flex:1}
 <div class="field"><label>写真（1枚）</label><input id="bPhoto" type="file" accept="image/*"><div class="meta">Googleフォト等からPCにダウンロードした写真を選択できます。登録時に自動で軽量化します。</div><div class="photo-actions"><button type="button" class="btn secondary" id="replacePhotoBtn">📷 写真を変更</button><button type="button" class="btn secondary" id="reuploadPhotoBtn" style="display:none">☁️ 写真を再同期</button><button type="button" class="btn secondary" id="deletePhotoBtn">🗑️ 写真を削除</button></div></div>
 <div id="currentPhoto"></div>
 <div class="field"><label>メモ</label><textarea id="bMemo" rows="4" style="width:100%" placeholder="撮影・観察したときのメモ"></textarea></div>
-<div class="actions"><button class="btn secondary" id="birdCancel">キャンセル</button><button class="btn" id="birdSave">保存</button></div>
+<div class="actions"><button class="btn secondary" id="birdCancel">キャンセル</button><button type="button" class="btn secondary" id="deleteBirdRecordBtn" style="display:none">🗑️ この鳥の記録を削除</button><button class="btn" id="birdSave">保存</button></div>
 </div></div>
 
 <div class="modal" id="placeModal"><div class="dialog"><h2 id="placeModalTitle">行先を編集</h2>
@@ -340,6 +340,12 @@ async function repairBrokenPhotos(){
       // 既存ファイルを削除/上書きせず、鳥レコードのphotoPathだけを更新する。
       b.photoPath=candidate.path;
       b.photoUpdatedAt=candidate.created||Date.now();
+      // 写真登録日が空欄の場合のみStorage作成日を補完。既存の日付は上書きしない。
+      // Storage作成日は実際の撮影日/図鑑登録日と一致するとは限らないため、推定値として扱う。
+      if(!b.photoDate && candidate.created){
+        const d=new Date(candidate.created);
+        if(!Number.isNaN(d.getTime())) b.photoDate=d.toISOString().slice(0,10);
+      }
       b.photoDeletedAt=0;
       b.updatedAt=Date.now();
       try{b._photoUrl=await getCloudPhotoUrl(b);}catch(e){b._photoUrl="";}
@@ -689,9 +695,19 @@ async function deleteBirdPhoto(b){
  if(currentUser)await pushCloud();
  render();
 }
-function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";document.getElementById("birdSuggestBox").style.display="none";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:(b?"<div class='meta'>写真はありません</div>":"");document.getElementById("replacePhotoBtn").style.display=b?"":"none";document.getElementById("reuploadPhotoBtn").style.display=(b&&currentUser&&b.photo)?"":"none";document.getElementById("deletePhotoBtn").style.display=(b&&(b.photo||b.photoPath))?"":"none";fillChecks(b?.places||[]);openModal("birdModal")}
+function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;document.getElementById("deleteBirdRecordBtn").style.display=b?"":"none";birdModalTitle.textContent=b?"鳥を編集":"鳥を追加";bName.value=b?.鳥名||"";bOrder.value=b?.["鳥類分類（目）"]||"";bSeason.value=b?.["留鳥／冬鳥／夏鳥／漂鳥"]||"";bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";bPhoto.value="";document.getElementById("birdSuggestBox").style.display="none";currentPhoto.innerHTML=(b?._photoUrl||b?.photo||b?.photoPath)?`<img class="photo-preview" src="${esc(b._photoUrl||b.photo||b.photoPath)}">`:(b?"<div class='meta'>写真はありません</div>":"");document.getElementById("replacePhotoBtn").style.display=b?"":"none";document.getElementById("reuploadPhotoBtn").style.display=(b&&currentUser&&b.photo)?"":"none";document.getElementById("deletePhotoBtn").style.display=(b&&(b.photo||b.photoPath))?"":"none";fillChecks(b?.places||[]);openModal("birdModal")}
 function editPlace(id){let p=data.places.find(x=>x.id===id);window.editingPlace=id;placeModalTitle.textContent=p?"行先を編集":"行先を追加";pName.value=p?.場所名||"";pPref.value=p?.都道府県||"";document.getElementById("placeSuggestBox").style.display="none";openModal("placeModal")}
-addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");birdSuggest.onclick=showBirdSuggestion;placeSuggest.onclick=showPlaceSuggestion;replacePhotoBtn.onclick=()=>bPhoto.click();
+addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);birdSearch.oninput=renderBirds;placeSearch.oninput=renderPlaces;clearPref.onclick=()=>{selectedPref="";renderPlaces();loadMap()};document.getElementById("deleteBirdRecordBtn").onclick=async()=>{
+ const id=window.editingBird;
+ const b=data.birds.find(x=>x.id===id);
+ if(!b)return;
+ if(!confirm(`「${b.鳥名||"名称未設定"}」の鳥記録を削除しますか？\n\n鳥の記録と行先との関連付けが削除されます。Storageの写真ファイル自体は削除しません。`))return;
+ data.birds=data.birds.filter(x=>x.id!==id);
+ localStorage.setItem(KEY,JSON.stringify(data));
+ try{if(currentUser)await pushCloud();render();closeModal("birdModal");setStatus("鳥の記録を削除しました（写真ファイルは保持）","ok");}
+ catch(e){alert("クラウド保存に失敗しました。再読み込みせず、バックアップを保管してから状況を確認してください。\n"+e.message);}
+};
+birdCancel.onclick=()=>closeModal("birdModal");placeCancel.onclick=()=>closeModal("placeModal");birdSuggest.onclick=showBirdSuggestion;placeSuggest.onclick=showPlaceSuggestion;replacePhotoBtn.onclick=()=>bPhoto.click();
 reuploadPhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!currentUser||!b.photo)return;try{setStatus("☁️ 写真を再同期中…");b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);b.photoUpdatedAt=Date.now();b.updatedAt=Date.now();b._photoUrl=await getCloudPhotoUrl(b);localStorage.setItem(KEY,JSON.stringify(data));await pushCloud();currentPhoto.innerHTML=b._photoUrl?`<img class="photo-preview" src="${esc(b._photoUrl)}">`:currentPhoto.innerHTML;setStatus("☁️ 写真を再同期しました","ok")}catch(e){alert("写真の再同期に失敗しました。\n"+e.message)}};
 deletePhotoBtn.onclick=async()=>{const b=data.birds.find(x=>x.id===window.editingBird);if(!b||!(b.photo||b.photoPath))return;if(!confirm("この写真を削除しますか？"))return;try{await deleteBirdPhoto(b);closeModal("birdModal")}catch(e){alert("写真の削除に失敗しました。\n"+e.message)}};
 birdSave.onclick=async()=>{
