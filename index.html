@@ -169,6 +169,26 @@ function merge(a,b){
      const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
      const other=winner===v?old:v;
      const base={...winner};
+
+     // 復旧対策：片方の端末でメモや観察場所が空になっていても、
+     // もう片方に値が残っていれば、空データで上書きしない。
+     // 観察場所は端末間の登録を統合し、重複IDだけを除く。
+     if ("鳥名" in base) {
+       const winnerMemo=String(winner.memo||"").trim();
+       const otherMemo=String(other.memo||"").trim();
+       if (!winnerMemo && otherMemo) base.memo=other.memo;
+       const winnerPlaces=Array.isArray(winner.places)?winner.places:[];
+       const otherPlaces=Array.isArray(other.places)?other.places:[];
+       base.places=[...new Set([...winnerPlaces,...otherPlaces])];
+       ["鳥類分類（目）","留鳥／冬鳥／夏鳥／漂鳥","photoDate"].forEach(k=>{
+         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
+       });
+     } else {
+       ["場所名","都道府県"].forEach(k=>{
+         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
+       });
+     }
+
      // 写真は鳥レコード全体とは別に更新時刻を持たせる。
      // これにより「PCで写真を削除した後、スマホでメモだけ編集した」
      // ような場合でも、古い写真が復活しない。
@@ -223,14 +243,7 @@ async function syncCloud(){
  try{
    const {data:row,error}=await supabaseClient.from(CLOUD_TABLE).select("records").eq("user_id",currentUser.id).maybeSingle();
    if(error)throw error;
-   if(row?.records){
-     // 起動時はクラウドを正本として読み込む。
-     // 端末側のlocalStorageには古い空欄データが残っている可能性があり、
-     // merge→pushCloudすると復元済みクラウドデータを空欄で上書きするため、
-     // 起動時の自動統合は行わない。
-     data=normalize(row.records);
-     localStorage.setItem(KEY,JSON.stringify(data));
-   }
+   if(row?.records)data=normalize(merge(normalize(data),normalize(row.records)));
 
    // 既存localStorage写真を初回同期時にStorageへ移行する。
    // PC側に写真が残っていてphotoPathが無い場合も、ここでクラウド化する。
@@ -318,47 +331,45 @@ async function repairBrokenPhotos(){
     if(error)throw error;
 
     const files=(objects||[]).filter(o=>o && o.name && /\.jpg$/i.test(o.name));
+    const fileNames=new Set(files.map(o=>o.name));
     const byBird=new Map();
     for(const o of files){
-      // 現在の保存形式: b0_xxxxx.jpg
-      const m=o.name.match(/^(b\d+)_([0-9a-z]+)\.jpg$/i);
+      // 旧形式 b0.jpg と、日時付き形式 b0_xxxxx.jpg の両方を認識する。
+      // 同じ鳥に複数ある場合は、名前順で最も新しい候補を優先する。
+      const m=o.name.match(/^(b\d+)(?:_([0-9a-z]+))?\.jpg$/i);
       if(!m)continue;
       const birdId=m[1];
       const path=prefix+o.name;
       const old=byBird.get(birdId);
-      // タイムスタンプ部分を比較して新しいものを優先
       if(!old || o.name.localeCompare(old.name)>0) byBird.set(birdId,{name:o.name,path});
     }
 
     let checked=0, broken=0, repaired=0, available=0;
     const detail=[];
     for(const b of data.birds){
-      if(!b.photoPath)continue;
+      // 削除を明示した写真は復活させない。写真Pathが空の旧データも診断対象。
+      if(b.photoDeletedAt)continue;
       checked++;
-      let ok=false;
-      try{ const checkedUrl=await getCloudPhotoUrl(b); ok=!!checkedUrl; if(ok)b._photoUrl=checkedUrl; }catch(e){ ok=false; }
-      if(ok){continue;}
-      broken++;
+      const currentPath=b.photoPath?storagePathFromPhotoPath(b.photoPath):"";
+      const currentName=currentPath?currentPath.split("/").pop():"";
+      const currentExists=!!currentName && fileNames.has(currentName);
+      if(currentExists){
+        try{ b._photoUrl=await getCloudPhotoUrl(b); }catch(e){}
+        continue;
+      }
+      if(b.photoPath)broken++;
       const candidate=byBird.get(b.id);
       if(candidate){
         available++;
-        // まず候補が本当にダウンロード可能か確認
-        try{
-          const test={...b,photoPath:candidate.path};
-          const url=await getCloudPhotoUrl(test);
-          if(url){
-            b.photoPath=candidate.path;
-            b.photoUpdatedAt=Date.now();
-            b.photoDeletedAt=0;
-            b.updatedAt=Date.now();
-            b._photoUrl=url;
-            repaired++;
-            detail.push(`✓ ${b.鳥名}`);
-          }
-        }catch(e){
-          detail.push(`△ ${b.鳥名}: Storage画像を取得できません`);
-        }
-      }else{
+        // Storage一覧に実在するファイルだけを候補にする。公開URLの生成だけでは存在確認にならない。
+        b.photoPath=candidate.path;
+        b.photoUpdatedAt=Date.now();
+        b.photoDeletedAt=0;
+        b.updatedAt=Date.now();
+        try{ b._photoUrl=await getCloudPhotoUrl(b); }catch(e){ b._photoUrl=""; }
+        repaired++;
+        detail.push(`✓ ${b.鳥名}: ${candidate.name}`);
+      }else if(b.photoPath){
         detail.push(`× ${b.鳥名}: Storageに対応写真なし`);
       }
     }
