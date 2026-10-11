@@ -169,6 +169,26 @@ function merge(a,b){
      const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
      const other=winner===v?old:v;
      const base={...winner};
+
+     // 復旧対策：片方の端末でメモや観察場所が空になっていても、
+     // もう片方に値が残っていれば、空データで上書きしない。
+     // 観察場所は端末間の登録を統合し、重複IDだけを除く。
+     if ("鳥名" in base) {
+       const winnerMemo=String(winner.memo||"").trim();
+       const otherMemo=String(other.memo||"").trim();
+       if (!winnerMemo && otherMemo) base.memo=other.memo;
+       const winnerPlaces=Array.isArray(winner.places)?winner.places:[];
+       const otherPlaces=Array.isArray(other.places)?other.places:[];
+       base.places=[...new Set([...winnerPlaces,...otherPlaces])];
+       ["鳥類分類（目）","留鳥／冬鳥／夏鳥／漂鳥","photoDate"].forEach(k=>{
+         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
+       });
+     } else {
+       ["場所名","都道府県"].forEach(k=>{
+         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
+       });
+     }
+
      // 写真は鳥レコード全体とは別に更新時刻を持たせる。
      // これにより「PCで写真を削除した後、スマホでメモだけ編集した」
      // ような場合でも、古い写真が復活しない。
