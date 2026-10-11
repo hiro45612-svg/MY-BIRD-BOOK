@@ -749,6 +749,30 @@ repairPhotosBtn.onclick=()=>repairBrokenPhotos();
 cloudLogoutBtn.onclick=async()=>{await supabaseClient.auth.signOut();currentUser=null;cloudLogoutBtn.style.display="none";setStatus("☁️ クラウド：ログアウト")};
 authSignup.onclick=async()=>{const {error}=await supabaseClient.auth.signUp({email:authEmail.value.trim(),password:authPassword.value});authMessage.textContent=error?"登録エラー："+error.message:"登録しました。確認メールが必要な設定ならメールを確認してください。"};
 authLogin.onclick=async()=>{const {data:r,error}=await supabaseClient.auth.signInWithPassword({email:authEmail.value.trim(),password:authPassword.value});if(error){authMessage.textContent="ログインエラー："+error.message;return}currentUser=r.user;cloudReady=true;cloudLogoutBtn.style.display="";closeModal("authModal");await syncCloud()};
+async function restorePhotoRegistrationDates(){
+ // photoDateが空欄の記録だけ、写真の取り込み・更新日時(photoUpdatedAt)から日付を復元する。
+ // 既に登録されている日付は上書きしない。
+ let changed=0;
+ data.birds.forEach(b=>{
+   if(!b.photoDate && b.photoUpdatedAt){
+     const t=Number(b.photoUpdatedAt);
+     if(Number.isFinite(t) && t>0){
+       const d=new Date(t);
+       if(!Number.isNaN(d.getTime())){
+         b.photoDate=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+         changed++;
+       }
+     }
+   }
+ });
+ if(changed){
+   localStorage.setItem(KEY,JSON.stringify(data));
+   if(currentUser) await pushCloud();
+   console.info("写真登録日を写真更新日時から復元:",changed,"件");
+ }
+ return changed;
+}
+
 async function bootCloud(){
  try{
   if(!initSupabase())return;
@@ -759,6 +783,7 @@ async function bootCloud(){
     document.getElementById("cloudLogoutBtn").style.display="";
     await syncCloud();
     await hydrateCloudPhotos();
+    await restorePhotoRegistrationDates();
   }else setStatus("☁️ クラウド：未ログイン");
  }catch(e){
   console.error("MY BIRD BOOK bootCloud:",e);
