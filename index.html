@@ -3,35 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MY BIRD BOOK v2.8 修正版</title>
+<title>MY BIRD BOOK — 復旧用 INDEX</title>
 </head>
 <body>
-<p style="font-family:system-ui;padding:24px;line-height:1.7">🐦 MY BIRD BOOKを読み込んでいます…</p>
+<p style="font-family:system-ui;padding:24px;line-height:1.7">🐦 MY BIRD BOOKを復旧しています…</p>
 <script>
 (async () => {
-  /*
-   * 既存の安定版 INDEX を取得し、追加写真保存処理の二重挿入だけを除去します。
-   * 鳥・行先・写真データやSupabaseの設定は変更しません。
-   * 取得先は、差し替え前の既存 INDEX の固定コミットです。
-   */
+  // 差し替え直前の index.html をそのまま読み込みます。追加修正は行いません。
   const SOURCE = "https://raw.githubusercontent.com/hiro45612-svg/MY-BIRD-BOOK/9ad8032d3161441df50036562892fdb77da9e905/index.html";
   try {
     const response = await fetch(SOURCE, { cache: "no-store" });
-    if (!response.ok) throw new Error("既存INDEXを取得できませんでした (" + response.status + ")");
-    let html = await response.text();
-
-    const lines = html.split("\n");
-    const marker = '複数写真対応の修正対象が見つかりません: save extras';
-    const index = lines.findIndex(line => line.includes(marker));
-    if (index < 0 || !lines[index + 1]?.includes('html=html.replace("  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal(')) {
-      throw new Error("修正対象の保存処理が見つかりません。既存INDEXは変更せず停止しました。");
-    }
-
-    // v2.6で重複挿入されていたガード行と保存処理行の2行だけを除去。
-    // 後段のv2.8保存処理はそのまま残します。
-    lines.splice(index, 2);
-    html = lines.join("\n");
-
+    if (!response.ok) throw new Error("差し替え前のINDEXを取得できませんでした (" + response.status + ")");
+    const html = await response.text();
     document.open();
     document.write(html);
     document.close();
@@ -39,9 +22,9 @@
     document.body.innerHTML =
       '<main style="font-family:system-ui;padding:24px;line-height:1.8">' +
       '<h2>🐦 MY BIRD BOOKを読み込めませんでした</h2>' +
-      '<p>通信状態を確認して再読み込みしてください。</p>' +
-      '<p style="color:#777;overflow-wrap:anywhere"></p></main>';
-    document.querySelector("main p:last-child").textContent = String(error.message || error);
+      '<p>通信状態を確認してください。データを削除したり初期化したりしないでください。</p>' +
+      '<p id="err" style="color:#777;overflow-wrap:anywhere"></p></main>';
+    document.getElementById("err").textContent = String(error.message || error);
   }
 })();
 </script>
