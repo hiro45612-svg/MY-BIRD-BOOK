@@ -169,26 +169,6 @@ function merge(a,b){
      const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
      const other=winner===v?old:v;
      const base={...winner};
-
-     // 復旧対策：片方の端末でメモや観察場所が空になっていても、
-     // もう片方に値が残っていれば、空データで上書きしない。
-     // 観察場所は端末間の登録を統合し、重複IDだけを除く。
-     if ("鳥名" in base) {
-       const winnerMemo=String(winner.memo||"").trim();
-       const otherMemo=String(other.memo||"").trim();
-       if (!winnerMemo && otherMemo) base.memo=other.memo;
-       const winnerPlaces=Array.isArray(winner.places)?winner.places:[];
-       const otherPlaces=Array.isArray(other.places)?other.places:[];
-       base.places=[...new Set([...winnerPlaces,...otherPlaces])];
-       ["鳥類分類（目）","留鳥／冬鳥／夏鳥／漂鳥","photoDate"].forEach(k=>{
-         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
-       });
-     } else {
-       ["場所名","都道府県"].forEach(k=>{
-         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
-       });
-     }
-
      // 写真は鳥レコード全体とは別に更新時刻を持たせる。
      // これにより「PCで写真を削除した後、スマホでメモだけ編集した」
      // ような場合でも、古い写真が復活しない。
@@ -243,7 +223,14 @@ async function syncCloud(){
  try{
    const {data:row,error}=await supabaseClient.from(CLOUD_TABLE).select("records").eq("user_id",currentUser.id).maybeSingle();
    if(error)throw error;
-   if(row?.records)data=normalize(merge(normalize(data),normalize(row.records)));
+   if(row?.records){
+     // 起動時はクラウドを正本として読み込む。
+     // 端末側のlocalStorageには古い空欄データが残っている可能性があり、
+     // merge→pushCloudすると復元済みクラウドデータを空欄で上書きするため、
+     // 起動時の自動統合は行わない。
+     data=normalize(row.records);
+     localStorage.setItem(KEY,JSON.stringify(data));
+   }
 
    // 既存localStorage写真を初回同期時にStorageへ移行する。
    // PC側に写真が残っていてphotoPathが無い場合も、ここでクラウド化する。
