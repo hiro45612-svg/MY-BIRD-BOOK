@@ -3,170 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MY BIRD BOOK v2.8 複数写真保存・表示修正版</title>
+<title>MY BIRD BOOK v2.8 修正版</title>
+</head>
+<body>
+<p style="font-family:system-ui;padding:24px;line-height:1.7">🐦 MY BIRD BOOKを読み込んでいます…</p>
 <script>
-/*
- * MY BIRD BOOK — localStorage容量対策版
- * 元のアプリ本体は、現在の安定版コミットから読み込みます。
- * 写真がSupabase Storageに保存済み(photoPathあり)の場合、
- * ブラウザ側には写真本体(base64)を保存しないようにします。
- */
-(async()=>{
-  const SOURCE="https://raw.githubusercontent.com/hiro45612-svg/MY-BIRD-BOOK/f2f02ee59abca0d012ab4006b027ff76966b136d/index.html";
-  const KEY="myBirdBook_v02";
+(async () => {
+  /*
+   * 既存の安定版 INDEX を取得し、追加写真保存処理の二重挿入だけを除去します。
+   * 鳥・行先・写真データやSupabaseの設定は変更しません。
+   * 取得先は、差し替え前の既存 INDEX の固定コミットです。
+   */
+  const SOURCE = "https://raw.githubusercontent.com/hiro45612-svg/MY-BIRD-BOOK/9ad8032d3161441df50036562892fdb77da9e905/index.html";
+  try {
+    const response = await fetch(SOURCE, { cache: "no-store" });
+    if (!response.ok) throw new Error("既存INDEXを取得できませんでした (" + response.status + ")");
+    let html = await response.text();
 
-  function compact(value){
-    try{
-      const obj=JSON.parse(value);
-      if(!obj || !Array.isArray(obj.birds)) return value;
-      obj.birds.forEach(b=>{
-        if(b && b.photoPath){ b.photo=""; b._photoUrl=""; }
-        if(b && Array.isArray(b.extraPhotos)) b.extraPhotos.forEach(ph=>{
-          if(ph && ph.photoPath){ ph.photo=""; ph._photoUrl=""; }
-        });
-      });
-      return JSON.stringify(obj);
-    }catch(e){
-      return value;
+    const lines = html.split("\n");
+    const marker = '複数写真対応の修正対象が見つかりません: save extras';
+    const index = lines.findIndex(line => line.includes(marker));
+    if (index < 0 || !lines[index + 1]?.includes('html=html.replace("  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal(')) {
+      throw new Error("修正対象の保存処理が見つかりません。既存INDEXは変更せず停止しました。");
     }
-  }
 
-  const originalSetItem=Storage.prototype.setItem;
-  Storage.prototype.setItem=function(key,value){
-    if(key===KEY) value=compact(value);
-    return originalSetItem.call(this,key,value);
-  };
-
-  /* すでに残っている巨大な写真データも、photoPathがあるものだけ整理 */
-  try{
-    const old=localStorage.getItem(KEY);
-    if(old){
-      const small=compact(old);
-      if(small!==old) originalSetItem.call(localStorage,KEY,small);
-    }
-  }catch(e){
-    console.warn("MY BIRD BOOK localStorage cleanup:",e);
-  }
-
-  try{
-    const res=await fetch(SOURCE,{cache:"no-store"});
-    if(!res.ok) throw new Error("元アプリを読み込めませんでした");
-    let html=await res.text();
-    if(!html.includes("<div class=\"actions\"><button class=\"btn secondary\" id=\"birdCancel\">キャンセル</button><button class=\"btn\" id=\"birdSave\">保存</button></div>")) throw new Error('修正対象が見つかりません');
-    html=html.replace("<div class=\"actions\"><button class=\"btn secondary\" id=\"birdCancel\">キャンセル</button><button class=\"btn\" id=\"birdSave\">保存</button></div>","<div class=\"field\"><button type=\"button\" class=\"btn secondary\" id=\"deleteBirdBtn\" style=\"display:none;background:#f8e5e3;color:#8b2923\">🗑️ この野鳥の登録を削除</button><div class=\"meta\">登録全体と写真・メモも削除します。操作前に確認が表示されます。</div></div><div class=\"actions\"><button class=\"btn secondary\" id=\"birdCancel\">キャンセル</button><button class=\"btn\" id=\"birdSave\">保存</button></div>");
-    if(!html.includes("d.birds=(d.birds||[]).map((b,i)=>({...b,id:b.id||\"b\"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||\"\",photoPath:b.photoPath||\"\",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),updatedAt:Number(b.updatedAt||0)}));")) throw new Error('修正対象が見つかりません');
-    html=html.replace("d.birds=(d.birds||[]).map((b,i)=>({...b,id:b.id||\"b\"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||\"\",photoPath:b.photoPath||\"\",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),updatedAt:Number(b.updatedAt||0)}));","d.deletedBirdIds=Array.isArray(d.deletedBirdIds)?d.deletedBirdIds:[];\n d.birds=(d.birds||[]).filter(b=>!d.deletedBirdIds.includes(b.id)).map((b,i)=>({...b,id:b.id||\"b\"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||\"\",photoPath:b.photoPath||\"\",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),updatedAt:Number(b.updatedAt||0)}));");
-    if(!html.includes("return {birds:mergeList(a.birds,b.birds),places:mergeList(a.places,b.places)};")) throw new Error('修正対象が見つかりません');
-    html=html.replace("return {birds:mergeList(a.birds,b.birds),places:mergeList(a.places,b.places)};","const deletedBirdIds=[...new Set([...(a.deletedBirdIds||[]),...(b.deletedBirdIds||[])])];\n return {birds:mergeList(a.birds,b.birds).filter(x=>!deletedBirdIds.includes(x.id)),places:mergeList(a.places,b.places),deletedBirdIds};");
-    if(!html.includes("function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?\"鳥を編集\":\"鳥を追加\";")) throw new Error('修正対象が見つかりません');
-    html=html.replace("function editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;birdModalTitle.textContent=b?\"鳥を編集\":\"鳥を追加\";","async function deleteBirdRecord(){\n const id=window.editingBird;const b=data.birds.find(x=>x.id===id);if(!b)return;\n if(!confirm(\"「\"+b.鳥名+\"」の登録全体を削除します。写真・メモ・行先との関連も削除されます。この操作は元に戻せません。よろしいですか？\"))return;\n try{\n  if(currentUser&&b.photoPath){const path=storagePathFromPhotoPath(b.photoPath);if(path){const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);if(error)throw error;photoUrlCache.delete(path)}}\n  data.birds=data.birds.filter(x=>x.id!==id);data.deletedBirdIds=[...new Set([...(data.deletedBirdIds||[]),id])];\n  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal(\"birdModal\");\n }catch(e){alert(\"登録の削除・同期に失敗しました。\\\\n\"+e.message+\"\\\\n\\\\n登録は削除処理を完了できませんでした。通信状態を確認して再度お試しください。\")}\n}\nfunction editBird(id){let b=data.birds.find(x=>x.id===id);window.editingBird=id;document.getElementById(\"deleteBirdBtn\").style.display=b?\"\":\"none\";birdModalTitle.textContent=b?\"鳥を編集\":\"鳥を追加\";");
-    if(!html.includes("addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);")) throw new Error('修正対象が見つかりません');
-    html=html.replace("addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);","addBird.onclick=()=>editBird(null);addPlace.onclick=()=>editPlace(null);deleteBirdBtn.onclick=deleteBirdRecord;");
-    
-    // v2.6: 1種につき複数写真（雄・雌・幼鳥など）を管理する。
-    if(!html.includes("<div id=\"currentPhoto\"></div>\n<div class=\"field\"><label>メモ</label>")) throw new Error("複数写真対応の修正対象が見つかりません: modal extra photo input");
-    html=html.replace("<div id=\"currentPhoto\"></div>\n<div class=\"field\"><label>メモ</label>","<div id=\"currentPhoto\"></div>\n<div class=\"field\"><label>追加写真（雄・雌・幼鳥など）</label><input id=\"bExtraPhotos\" type=\"file\" accept=\"image/*\" multiple><div class=\"row\" style=\"align-items:center\"><label for=\"extraPhotoLabel\">今回追加する写真の区分</label><select id=\"extraPhotoLabel\"><option>その他</option><option>雄</option><option>雌</option><option>幼鳥</option></select></div><div class=\"meta\">複数枚を選べます。同じ区分の写真をまとめて追加してください。区分を変えて追加すれば、雄・雌を分けて記録できます。</div><div id=\"currentExtraPhotos\"></div></div>\n<div class=\"field\"><label>メモ</label>");
-    if(!html.includes("d.birds=(d.birds||[]).filter(b=>!d.deletedBirdIds.includes(b.id)).map((b,i)=>({...b,id:b.id||\"b\"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||\"\",photoPath:b.photoPath||\"\",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),updatedAt:Number(b.updatedAt||0)}));")) throw new Error("複数写真対応の修正対象が見つかりません: normalize extra photos");
-    html=html.replace("d.birds=(d.birds||[]).filter(b=>!d.deletedBirdIds.includes(b.id)).map((b,i)=>({...b,id:b.id||\"b\"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||\"\",photoPath:b.photoPath||\"\",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),updatedAt:Number(b.updatedAt||0)}));","d.birds=(d.birds||[]).filter(b=>!d.deletedBirdIds.includes(b.id)).map((b,i)=>({...b,id:b.id||\"b\"+i,places:Array.isArray(b.places)?b.places:[],photo:b.photo||\"\",photoPath:b.photoPath||\"\",photoUpdatedAt:Number(b.photoUpdatedAt||b.updatedAt||0),photoDeletedAt:Number(b.photoDeletedAt||0),extraPhotos:(Array.isArray(b.extraPhotos)?b.extraPhotos:[]).map((ph,j)=>({...ph,id:ph.id||(\"ph\"+i+\"_\"+j),label:ph.label||\"その他\",photo:ph.photo||\"\",photoPath:ph.photoPath||\"\",photoUpdatedAt:Number(ph.photoUpdatedAt||ph.updatedAt||0),deletedAt:Number(ph.deletedAt||0),updatedAt:Number(ph.updatedAt||0)})),updatedAt:Number(b.updatedAt||0)}));");
-    if(!html.includes("     m.set(v.id,base);")) throw new Error("複数写真対応の修正対象が見つかりません: merge extra photos");
-    html=html.replace("     m.set(v.id,base);","     const photoMap=new Map();\n     [...(old.extraPhotos||[]),...(v.extraPhotos||[])].forEach(ph=>{\n       const prior=photoMap.get(ph.id);\n       if(!prior || Number(ph.updatedAt||0)>=Number(prior.updatedAt||0)) photoMap.set(ph.id,{...ph});\n     });\n     base.extraPhotos=[...photoMap.values()];\n     m.set(v.id,base);");
-    if(!html.includes("payload.birds=payload.birds.map(b=>({...b,photo:\"\",_photoUrl:\"\"}));")) throw new Error("複数写真対応の修正対象が見つかりません: cloud payload");
-    html=html.replace("payload.birds=payload.birds.map(b=>({...b,photo:\"\",_photoUrl:\"\"}));","payload.birds=payload.birds.map(b=>({...b,photo:\"\",_photoUrl:\"\",extraPhotos:(b.extraPhotos||[]).map(ph=>({...ph,photo:\"\",_photoUrl:\"\"}))}));");
-    if(!html.includes("   for(const b of data.birds){\n     if(b.photo && !b.photoPath){\n       setStatus(`☁️ 写真を移行中… ${b.鳥名}`);\n       b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);\n       migrated=true;\n     }\n   }")) throw new Error("複数写真対応の修正対象が見つかりません: sync migration");
-    html=html.replace("   for(const b of data.birds){\n     if(b.photo && !b.photoPath){\n       setStatus(`☁️ 写真を移行中… ${b.鳥名}`);\n       b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);\n       migrated=true;\n     }\n   }","   for(const b of data.birds){\n     if(b.photo && !b.photoPath){\n       setStatus(`☁️ 写真を移行中… ${b.鳥名}`);\n       b.photoPath=await uploadPhoto(b.id,b.photo,b.photoPath);\n       migrated=true;\n     }\n     for(const ph of (b.extraPhotos||[])){\n       if(ph.deletedAt) continue;\n       if(ph.photo && !ph.photoPath){\n         setStatus(`☁️ 追加写真を移行中… ${b.鳥名}`);\n         ph.photoPath=await uploadPhoto(b.id+\"_\"+ph.id,ph.photo,ph.photoPath);\n         migrated=true;\n       }\n     }\n   }");
-    if(!html.includes("   }\n }\n if(changed)render();\n}\nfunction esc(s)")) throw new Error("複数写真対応の修正対象が見つかりません: hydrate extra photos");
-    html=html.replace("   }\n }\n if(changed)render();\n}\nfunction esc(s)","   }\n   for(const ph of (b.extraPhotos||[])){\n     if(ph.deletedAt || !ph.photoPath) continue;\n     try{ const url=await getCloudPhotoUrl(ph); if(url){ph._photoUrl=url;changed=true} }\n     catch(e){console.warn(\"extra photo load failed\",b.鳥名,e.message)}\n   }\n }\n if(changed)render();\n}\nfunction esc(s)");
-    if(!html.includes("photoCount.textContent=data.birds.filter(x=>x.photo||x.photoPath).length;")) throw new Error("複数写真対応の修正対象が見つかりません: photo count");
-    html=html.replace("photoCount.textContent=data.birds.filter(x=>x.photo||x.photoPath).length;","photoCount.textContent=data.birds.filter(x=>(x.photo||x.photoPath)||(x.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length;");
-    if(!html.includes("function birdCard(b){let names=b.places.map(id=>data.places.find(p=>p.id===id)?.場所名).filter(Boolean);return `<article class=\"card\"><div class=\"photo\">${(b._photoUrl||b.photo||b.photoPath)?`<img src=\"${esc(b._photoUrl||b.photo||b.photoPath)}\">`:\"🐦\"}</div><div class=\"body\"><h3>${esc(b.鳥名)}</h3><div class=\"meta\">${esc(b[\"鳥類分類（目）\"])} ／ ${esc(b[\"留鳥／冬鳥／夏鳥／漂鳥\"])}${b.photoDate?`<br>写真登録：${esc(b.photoDate)}`:\"\"}</div><div class=\"tags\">${names.map(n=>`<span class=\"tag\">📍 ${esc(n)}</span>`).join(\"\")}</div>${b.memo?`<div class=\"meta\" style=\"margin-top:8px\">${esc(b.memo)}</div>`:\"\"}<button class=\"btn secondary\" onclick=\"editBird('${b.id}')\">編集</button><button class=\"btn secondary\" onclick=\"birdChat('${b.id}')\">🧠 ちゃぴこと壁打ち</button></div></article>`}")) throw new Error("複数写真対応の修正対象が見つかりません: bird card gallery");
-    html=html.replace("function birdCard(b){let names=b.places.map(id=>data.places.find(p=>p.id===id)?.場所名).filter(Boolean);return `<article class=\"card\"><div class=\"photo\">${(b._photoUrl||b.photo||b.photoPath)?`<img src=\"${esc(b._photoUrl||b.photo||b.photoPath)}\">`:\"🐦\"}</div><div class=\"body\"><h3>${esc(b.鳥名)}</h3><div class=\"meta\">${esc(b[\"鳥類分類（目）\"])} ／ ${esc(b[\"留鳥／冬鳥／夏鳥／漂鳥\"])}${b.photoDate?`<br>写真登録：${esc(b.photoDate)}`:\"\"}</div><div class=\"tags\">${names.map(n=>`<span class=\"tag\">📍 ${esc(n)}</span>`).join(\"\")}</div>${b.memo?`<div class=\"meta\" style=\"margin-top:8px\">${esc(b.memo)}</div>`:\"\"}<button class=\"btn secondary\" onclick=\"editBird('${b.id}')\">編集</button><button class=\"btn secondary\" onclick=\"birdChat('${b.id}')\">🧠 ちゃぴこと壁打ち</button></div></article>`}","function birdCard(b){let names=b.places.map(id=>data.places.find(p=>p.id===id)?.場所名).filter(Boolean);const extras=(b.extraPhotos||[]).filter(ph=>!ph.deletedAt);const pics=[...(b.photo||b.photoPath?[{label:\"代表写真\",src:b._photoUrl||b.photo||b.photoPath}]:[]),...extras.map(ph=>({label:ph.label,src:ph._photoUrl||ph.photo||ph.photoPath}))];return `<article class=\"card\"><div class=\"photo\">${pics.length?pics.map(ph=>`<div style=\"display:inline-block;margin:3px;text-align:center\"><img style=\"max-width:100%;max-height:180px;object-fit:contain\" src=\"${esc(ph.src)}\"><div class=\"meta\">${esc(ph.label)}</div></div>`).join(\"\"):\"🐦\"}</div><div class=\"body\"><h3>${esc(b.鳥名)}</h3><div class=\"meta\">${esc(b[\"鳥類分類（目）\"])} ／ ${esc(b[\"留鳥／冬鳥／夏鳥／漂鳥\"])}${b.photoDate?`<br>写真登録：${esc(b.photoDate)}`:\"\"}</div><div class=\"tags\">${names.map(n=>`<span class=\"tag\">📍 ${esc(n)}</span>`).join(\"\")}</div>${b.memo?`<div class=\"meta\" style=\"margin-top:8px\">${esc(b.memo)}</div>`:\"\"}<button class=\"btn secondary\" onclick=\"editBird('${b.id}')\">編集</button><button class=\"btn secondary\" onclick=\"birdChat('${b.id}')\">🧠 ちゃぴこと壁打ち</button></div></article>`}");
-    if(!html.includes("async function deleteBirdPhoto(b){")) throw new Error("複数写真対応の修正対象が見つかりません: extra photo editor helper");
-    html=html.replace("async function deleteBirdPhoto(b){","function renderExtraPhotosEditor(b){\n const box=document.getElementById(\"currentExtraPhotos\"); if(!box)return;\n const photos=(b?.extraPhotos||[]).filter(ph=>!ph.deletedAt);\n box.innerHTML=photos.length?photos.map(ph=>`<div style=\"display:flex;align-items:center;gap:10px;margin:8px 0;padding:8px;border:1px solid #dbe2df;border-radius:8px\"><img src=\"${esc(ph._photoUrl||ph.photo||ph.photoPath||\"\")}\" style=\"width:72px;height:64px;object-fit:contain\"><div style=\"flex:1\"><b>${esc(ph.label)}</b><div class=\"meta\">追加写真</div></div><button type=\"button\" class=\"btn secondary\" data-delete-extra=\"${esc(ph.id)}\">🗑️ 削除</button></div>`).join(\"\"):`<div class=\"meta\">追加写真はまだありません。</div>`;\n box.querySelectorAll(\"[data-delete-extra]\").forEach(btn=>btn.onclick=async()=>{\n   const bird=data.birds.find(x=>x.id===window.editingBird); if(!bird)return;\n   const ph=(bird.extraPhotos||[]).find(x=>x.id===btn.dataset.deleteExtra);if(!ph)return;\n   if(!confirm(`「${bird.鳥名}」の「${ph.label}」写真を削除しますか？`))return;\n   try{\n     if(currentUser&&ph.photoPath){const path=storagePathFromPhotoPath(ph.photoPath);if(path){const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);if(error)throw error;photoUrlCache.delete(path)}}\n     ph.deletedAt=Date.now();ph.updatedAt=ph.deletedAt;ph.photo=\"\";ph._photoUrl=\"\";bird.updatedAt=Date.now();\n     localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();renderExtraPhotosEditor(bird);render();\n   }catch(e){alert(\"追加写真の削除・同期に失敗しました。\\n\"+e.message)}\n });\n}\nasync function deleteBirdPhoto(b){");
-    if(!html.includes("bPhoto.value=\"\";document.getElementById(\"birdSuggestBox\").style.display=\"none\";")) throw new Error("複数写真対応の修正対象が見つかりません: clear extra input");
-    html=html.replace("bPhoto.value=\"\";document.getElementById(\"birdSuggestBox\").style.display=\"none\";","bPhoto.value=\"\";document.getElementById(\"bExtraPhotos\").value=\"\";document.getElementById(\"birdSuggestBox\").style.display=\"none\";");
-    if(!html.includes("fillChecks(b?.places||[]);openModal(\"birdModal\")}")) throw new Error("複数写真対応の修正対象が見つかりません: render extra editor");
-    html=html.replace("fillChecks(b?.places||[]);openModal(\"birdModal\")}","fillChecks(b?.places||[]);renderExtraPhotosEditor(b);openModal(\"birdModal\")}");
-    if(!html.includes("  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal(\"birdModal\");")) throw new Error("複数写真対応の修正対象が見つかりません: save extras");
-    html=html.replace("  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal(\"birdModal\");","  const extraFiles=[...document.getElementById(\"bExtraPhotos\").files];\n  if(extraFiles.length){\n    if(!Array.isArray(b.extraPhotos))b.extraPhotos=[];\n    for(const extraFile of extraFiles){\n      setStatus(currentUser?\"☁️ 追加写真を保存中…\":\"追加写真を処理中…\");\n      const resizedExtra=await resizeBirdPhoto(extraFile,1200,0.82);\n      const photoId=\"ph\"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);\n      const ph={id:photoId,label:document.getElementById(\"extraPhotoLabel\").value,photo:resizedExtra,photoPath:\"\",_photoUrl:\"\",photoUpdatedAt:Date.now(),deletedAt:0,updatedAt:Date.now()};\n      if(currentUser){ph.photoPath=await uploadPhoto(b.id+\"_\"+ph.id,resizedExtra,\"\");ph._photoUrl=await getCloudPhotoUrl(ph);}\n      b.extraPhotos.push(ph);\n    }\n  }\n  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal(\"birdModal\");");
-    if(!html.includes("  if(currentUser&&b.photoPath){const path=storagePathFromPhotoPath(b.photoPath);if(path){const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);if(error)throw error;photoUrlCache.delete(path)}}\n  data.birds=data.birds.filter(x=>x.id!==id);")) throw new Error("複数写真対応の修正対象が見つかりません: delete record all photos");
-    html=html.replace("  if(currentUser&&b.photoPath){const path=storagePathFromPhotoPath(b.photoPath);if(path){const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);if(error)throw error;photoUrlCache.delete(path)}}\n  data.birds=data.birds.filter(x=>x.id!==id);","  if(currentUser){const paths=[b.photoPath,...(b.extraPhotos||[]).filter(ph=>!ph.deletedAt).map(ph=>ph.photoPath)].map(storagePathFromPhotoPath).filter(Boolean);if(paths.length){const {error}=await supabaseClient.storage.from(PHOTO_BUCKET).remove(paths);if(error)throw error;paths.forEach(path=>photoUrlCache.delete(path))}}\n  data.birds=data.birds.filter(x=>x.id!==id);");
-    if(!html.includes("${data.birds.filter(b=>b.photo).length}種")) throw new Error("複数写真対応の修正対象が見つかりません: export photo count");
-    html=html.replace("${data.birds.filter(b=>b.photo).length}種","${data.birds.filter(b=>(b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length}種");
-    if(!html.includes("- 写真：${(b.photo||b.photoPath)?\"あり\":\"なし\"}\\n- メモ：")) throw new Error("複数写真対応の修正対象が見つかりません: export photo labels");
-    html=html.replace("- 写真：${(b.photo||b.photoPath)?\"あり\":\"なし\"}\\n- メモ：","- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?\"あり\":\"なし\"}\\n- 追加写真：${(b.extraPhotos||[]).filter(ph=>!ph.deletedAt).map(ph=>ph.label).join(\"、\")||\"なし\"}\\n- メモ：");
-
-    // v2.7: 1枚目にも区分タグを付ける。
-    if(!html.includes('<div class="field"><label>写真（1枚）</label><input id="bPhoto"')) throw new Error('代表写真ラベルの修正対象が見つかりません');
-    html=html.replace('<div class="field"><label>写真（1枚）</label><input id="bPhoto"', '<div class="field"><label>代表写真の区分</label><select id="primaryPhotoLabel"><option>その他</option><option>雄</option><option>雌</option><option>幼鳥</option></select><div class="meta">1枚目の写真にも区分を設定できます。</div></div><div class="field"><label>写真（1枚）</label><input id="bPhoto"');
-    html=html.replace('{label:"代表写真",src:b._photoUrl||b.photo||b.photoPath}', '{label:b.photoLabel||"その他",src:b._photoUrl||b.photo||b.photoPath}');
-    html=html.replace('bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";', 'bDate.value=b?.photoDate||"";document.getElementById("primaryPhotoLabel").value=b?.photoLabel||"その他";bMemo.value=b?.memo||"";');
-    html=html.replace('b.photoDate=bDate.value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();', 'b.photoDate=bDate.value;b.photoLabel=document.getElementById("primaryPhotoLabel").value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();');
-
-    // v2.7: クラウドから取得した追加写真のURLを、手動同期後にも解決する。
-    html=html.replace('   await pushCloud();\n   render();\n   if(migrated)setStatus', '   await pushCloud();\n   await hydrateCloudPhotos();\n   render();\n   if(migrated)setStatus');
-
-    // v2.7: 写真一覧を開いた時もStorage URLを解決してから表示する。
-    html=html.replace('function renderExtraPhotosEditor(b){\n const box=document.getElementById("currentExtraPhotos"); if(!box)return;\n const photos=(b?.extraPhotos||[]).filter(ph=>!ph.deletedAt);\n box.innerHTML=', 'async function renderExtraPhotosEditor(b){\n const box=document.getElementById("currentExtraPhotos"); if(!box)return;\n const photos=(b?.extraPhotos||[]).filter(ph=>!ph.deletedAt);\n if(currentUser){for(const ph of photos){if(ph.photoPath&&!ph._photoUrl){try{ph._photoUrl=await getCloudPhotoUrl(ph)}catch(e){console.warn("extra photo URL load failed",e.message)}}}}\n box.innerHTML=');
-
-    // v2.7: アップロード済みの追加写真はStorage URLで表示し、余分なbase64を保持しない。
-    html=html.replace('if(currentUser){ph.photoPath=await uploadPhoto(b.id+"_"+ph.id,resizedExtra,"");ph._photoUrl=await getCloudPhotoUrl(ph);}', 'if(currentUser){ph.photoPath=await uploadPhoto(b.id+"_"+ph.id,resizedExtra,"");ph._photoUrl=await getCloudPhotoUrl(ph);}');
-
-    // v2.7: REBOOT出力にも代表写真の区分を記録する。
-    html=html.replace('- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?"あり":"なし"}\\n- 追加写真：', '- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?"あり":"なし"}（区分：${b.photoLabel||"その他"}）\\n- 追加写真：');
-
-    // v2.8: 追加写真の保存処理を birdSave に確実に挿入する。
-    const extraSaveAnchor='  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");';
-    if(!html.includes(extraSaveAnchor)) throw new Error("追加写真保存の挿入位置が見つかりません");
-    html=html.replace(extraSaveAnchor,`  const extraFiles=[...document.getElementById("bExtraPhotos").files];
-  if(extraFiles.length){
-    if(!Array.isArray(b.extraPhotos))b.extraPhotos=[];
-    for(const extraFile of extraFiles){
-      setStatus(currentUser?"☁️ 追加写真を保存中…":"追加写真を処理中…");
-      const resizedExtra=await resizeBirdPhoto(extraFile,1200,0.82);
-      const photoId="ph"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-      const ph={id:photoId,label:document.getElementById("extraPhotoLabel").value,photo:resizedExtra,photoPath:"",_photoUrl:"",photoUpdatedAt:Date.now(),deletedAt:0,updatedAt:Date.now()};
-      if(currentUser){ph.photoPath=await uploadPhoto(b.id+"_"+ph.id,resizedExtra,"");ph._photoUrl=await getCloudPhotoUrl(ph);}
-      b.extraPhotos.push(ph);
-    }
-  }
-  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");`);
-
-    // v2.8: 追加写真は保存後・別端末からの同期後にもStorage URLを解決する。
-    const renderAnchor='function render(){birdCount.textContent=data.birds.length;placeCount.textContent=data.places.length;photoCount.textContent=data.birds.filter(x=>(x.photo||x.photoPath)||(x.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length;renderBirds();renderPlaces();loadMap()}';
-    if(!html.includes(renderAnchor)) throw new Error("追加写真表示の挿入位置が見つかりません");
-    html=html.replace(renderAnchor,`function render(){birdCount.textContent=data.birds.length;placeCount.textContent=data.places.length;photoCount.textContent=data.birds.filter(x=>(x.photo||x.photoPath)||(x.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length;renderBirds();renderPlaces();loadMap();resolveExtraPhotoUrls()}
-function resolveExtraPhotoUrls(){
- if(!currentUser||!supabaseClient)return;
- const pending=[];
- for(const b of data.birds){for(const ph of (b.extraPhotos||[])){if(ph.deletedAt||!ph.photoPath||ph._photoUrl||ph._urlLoading)continue;ph._urlLoading=true;pending.push(getCloudPhotoUrl(ph).then(url=>{ph._urlLoading=false;if(url){ph._photoUrl=url;return true}return false}).catch(e=>{ph._urlLoading=false;console.warn("追加写真URLの取得失敗",e.message);return false}))}}
- if(pending.length)Promise.all(pending).then(results=>{if(results.some(Boolean))renderBirds()});
-}`);
-
-    const patch=`
-<script>
-/* localStorage容量対策は親ページ側ですでに設定済みです。 */
-<\/script>`;
-
-    html=html.replace('data.birds.filter(b=>b.photo).length','data.birds.filter(b=>b.photo||b.photoPath).length');
-    html=html.replace("</head>",patch+"\\n</head>");
-    /* Safety fix: the photo editor awaits Storage URL lookup, so it must be async. */
-    html=html.replace("function renderExtraPhotosEditor(b){", "async function renderExtraPhotosEditor(b){");
+    // v2.6で重複挿入されていたガード行と保存処理行の2行だけを除去。
+    // 後段のv2.8保存処理はそのまま残します。
+    lines.splice(index, 2);
+    html = lines.join("\n");
 
     document.open();
     document.write(html);
     document.close();
-  }catch(e){
-    document.body.innerHTML=
-      '<div style="font-family:system-ui;padding:30px;line-height:1.8">'+
-      '<h2>🐦 MY BIRD BOOKを読み込めませんでした</h2>'+
-      '<p>インターネット接続を確認して、ページを再読み込みしてください。</p>'+
-      '<p style="color:#777">'+String(e.message||e)+'</p>'+
-      '</div>';
+  } catch (error) {
+    document.body.innerHTML =
+      '<main style="font-family:system-ui;padding:24px;line-height:1.8">' +
+      '<h2>🐦 MY BIRD BOOKを読み込めませんでした</h2>' +
+      '<p>通信状態を確認して再読み込みしてください。</p>' +
+      '<p style="color:#777;overflow-wrap:anywhere"></p></main>';
+    document.querySelector("main p:last-child").textContent = String(error.message || error);
   }
 })();
 </script>
-</head>
-<body>
-<p style="font-family:system-ui;padding:30px">🐦 MY BIRD BOOKを読み込んでいます…</p>
 </body>
 </html>
