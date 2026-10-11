@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MY BIRD BOOK v2.7 写真区分・表示修正版</title>
+<title>MY BIRD BOOK v2.8 複数写真保存・表示修正版</title>
 <script>
 /*
  * MY BIRD BOOK — localStorage容量対策版
@@ -113,6 +113,34 @@
 
     // v2.7: REBOOT出力にも代表写真の区分を記録する。
     html=html.replace('- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?"あり":"なし"}\\n- 追加写真：', '- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?"あり":"なし"}（区分：${b.photoLabel||"その他"}）\\n- 追加写真：');
+
+    // v2.8: 追加写真の保存処理を birdSave に確実に挿入する。
+    const extraSaveAnchor='  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");';
+    if(!html.includes(extraSaveAnchor)) throw new Error("追加写真保存の挿入位置が見つかりません");
+    html=html.replace(extraSaveAnchor,`  const extraFiles=[...document.getElementById("bExtraPhotos").files];
+  if(extraFiles.length){
+    if(!Array.isArray(b.extraPhotos))b.extraPhotos=[];
+    for(const extraFile of extraFiles){
+      setStatus(currentUser?"☁️ 追加写真を保存中…":"追加写真を処理中…");
+      const resizedExtra=await resizeBirdPhoto(extraFile,1200,0.82);
+      const photoId="ph"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+      const ph={id:photoId,label:document.getElementById("extraPhotoLabel").value,photo:resizedExtra,photoPath:"",_photoUrl:"",photoUpdatedAt:Date.now(),deletedAt:0,updatedAt:Date.now()};
+      if(currentUser){ph.photoPath=await uploadPhoto(b.id+"_"+ph.id,resizedExtra,"");ph._photoUrl=await getCloudPhotoUrl(ph);}
+      b.extraPhotos.push(ph);
+    }
+  }
+  localStorage.setItem(KEY,JSON.stringify(data));if(currentUser)await pushCloud();render();closeModal("birdModal");`);
+
+    // v2.8: 追加写真は保存後・別端末からの同期後にもStorage URLを解決する。
+    const renderAnchor='function render(){birdCount.textContent=data.birds.length;placeCount.textContent=data.places.length;photoCount.textContent=data.birds.filter(x=>(x.photo||x.photoPath)||(x.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length;renderBirds();renderPlaces();loadMap()}';
+    if(!html.includes(renderAnchor)) throw new Error("追加写真表示の挿入位置が見つかりません");
+    html=html.replace(renderAnchor,`function render(){birdCount.textContent=data.birds.length;placeCount.textContent=data.places.length;photoCount.textContent=data.birds.filter(x=>(x.photo||x.photoPath)||(x.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length;renderBirds();renderPlaces();loadMap();resolveExtraPhotoUrls()}
+function resolveExtraPhotoUrls(){
+ if(!currentUser||!supabaseClient)return;
+ const pending=[];
+ for(const b of data.birds){for(const ph of (b.extraPhotos||[])){if(ph.deletedAt||!ph.photoPath||ph._photoUrl||ph._urlLoading)continue;ph._urlLoading=true;pending.push(getCloudPhotoUrl(ph).then(url=>{ph._urlLoading=false;if(url){ph._photoUrl=url;return true}return false}).catch(e=>{ph._urlLoading=false;console.warn("追加写真URLの取得失敗",e.message);return false}))}}
+ if(pending.length)Promise.all(pending).then(results=>{if(results.some(Boolean))renderBirds()});
+}`);
 
     const patch=`
 <script>
