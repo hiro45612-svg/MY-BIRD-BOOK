@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MY BIRD BOOK v2.6 複数写真対応</title>
+<title>MY BIRD BOOK v2.7 写真区分・表示修正版</title>
 <script>
 /*
  * MY BIRD BOOK — localStorage容量対策版
@@ -94,6 +94,25 @@
     html=html.replace("${data.birds.filter(b=>b.photo).length}種","${data.birds.filter(b=>(b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath))).length}種");
     if(!html.includes("- 写真：${(b.photo||b.photoPath)?\"あり\":\"なし\"}\\n- メモ：")) throw new Error("複数写真対応の修正対象が見つかりません: export photo labels");
     html=html.replace("- 写真：${(b.photo||b.photoPath)?\"あり\":\"なし\"}\\n- メモ：","- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?\"あり\":\"なし\"}\\n- 追加写真：${(b.extraPhotos||[]).filter(ph=>!ph.deletedAt).map(ph=>ph.label).join(\"、\")||\"なし\"}\\n- メモ：");
+
+    // v2.7: 1枚目にも区分タグを付ける。
+    if(!html.includes('<div class="field"><label>写真（1枚）</label><input id="bPhoto"')) throw new Error('代表写真ラベルの修正対象が見つかりません');
+    html=html.replace('<div class="field"><label>写真（1枚）</label><input id="bPhoto"', '<div class="field"><label>代表写真の区分</label><select id="primaryPhotoLabel"><option>その他</option><option>雄</option><option>雌</option><option>幼鳥</option></select><div class="meta">1枚目の写真にも区分を設定できます。</div></div><div class="field"><label>写真（1枚）</label><input id="bPhoto"');
+    html=html.replace('{label:"代表写真",src:b._photoUrl||b.photo||b.photoPath}', '{label:b.photoLabel||"その他",src:b._photoUrl||b.photo||b.photoPath}');
+    html=html.replace('bDate.value=b?.photoDate||"";bMemo.value=b?.memo||"";', 'bDate.value=b?.photoDate||"";document.getElementById("primaryPhotoLabel").value=b?.photoLabel||"その他";bMemo.value=b?.memo||"";');
+    html=html.replace('b.photoDate=bDate.value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();', 'b.photoDate=bDate.value;b.photoLabel=document.getElementById("primaryPhotoLabel").value;b.memo=bMemo.value.trim();b.updatedAt=Date.now();');
+
+    // v2.7: クラウドから取得した追加写真のURLを、手動同期後にも解決する。
+    html=html.replace('   await pushCloud();\n   render();\n   if(migrated)setStatus', '   await pushCloud();\n   await hydrateCloudPhotos();\n   render();\n   if(migrated)setStatus');
+
+    // v2.7: 写真一覧を開いた時もStorage URLを解決してから表示する。
+    html=html.replace('function renderExtraPhotosEditor(b){\n const box=document.getElementById("currentExtraPhotos"); if(!box)return;\n const photos=(b?.extraPhotos||[]).filter(ph=>!ph.deletedAt);\n box.innerHTML=', 'async function renderExtraPhotosEditor(b){\n const box=document.getElementById("currentExtraPhotos"); if(!box)return;\n const photos=(b?.extraPhotos||[]).filter(ph=>!ph.deletedAt);\n if(currentUser){for(const ph of photos){if(ph.photoPath&&!ph._photoUrl){try{ph._photoUrl=await getCloudPhotoUrl(ph)}catch(e){console.warn("extra photo URL load failed",e.message)}}}}\n box.innerHTML=');
+
+    // v2.7: アップロード済みの追加写真はStorage URLで表示し、余分なbase64を保持しない。
+    html=html.replace('if(currentUser){ph.photoPath=await uploadPhoto(b.id+"_"+ph.id,resizedExtra,"");ph._photoUrl=await getCloudPhotoUrl(ph);}', 'if(currentUser){ph.photoPath=await uploadPhoto(b.id+"_"+ph.id,resizedExtra,"");ph._photoUrl=await getCloudPhotoUrl(ph);}');
+
+    // v2.7: REBOOT出力にも代表写真の区分を記録する。
+    html=html.replace('- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?"あり":"なし"}\\n- 追加写真：', '- 写真：${((b.photo||b.photoPath)||(b.extraPhotos||[]).some(ph=>!ph.deletedAt&&(ph.photo||ph.photoPath)))?"あり":"なし"}（区分：${b.photoLabel||"その他"}）\\n- 追加写真：');
 
     const patch=`
 <script>
