@@ -149,6 +149,9 @@ function resolveExtraPhotoUrls(){
 
     html=html.replace('data.birds.filter(b=>b.photo).length','data.birds.filter(b=>b.photo||b.photoPath).length');
     html=html.replace("</head>",patch+"\\n</head>");
+    /* Safety fix: the photo editor awaits Storage URL lookup, so it must be async. */
+    html=html.replace("function renderExtraPhotosEditor(b){", "async function renderExtraPhotosEditor(b){");
+
     document.open();
     document.write(html);
     document.close();
