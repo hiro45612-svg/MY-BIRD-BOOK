@@ -169,26 +169,6 @@ function merge(a,b){
      const winner=Number(v.updatedAt||0)>Number(old.updatedAt||0)?v:old;
      const other=winner===v?old:v;
      const base={...winner};
-
-     // 復旧対策：片方の端末でメモや観察場所が空になっていても、
-     // もう片方に値が残っていれば、空データで上書きしない。
-     // 観察場所は端末間の登録を統合し、重複IDだけを除く。
-     if ("鳥名" in base) {
-       const winnerMemo=String(winner.memo||"").trim();
-       const otherMemo=String(other.memo||"").trim();
-       if (!winnerMemo && otherMemo) base.memo=other.memo;
-       const winnerPlaces=Array.isArray(winner.places)?winner.places:[];
-       const otherPlaces=Array.isArray(other.places)?other.places:[];
-       base.places=[...new Set([...winnerPlaces,...otherPlaces])];
-       ["鳥類分類（目）","留鳥／冬鳥／夏鳥／漂鳥","photoDate"].forEach(k=>{
-         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
-       });
-     } else {
-       ["場所名","都道府県"].forEach(k=>{
-         if (!String(base[k]||"").trim() && String(other[k]||"").trim()) base[k]=other[k];
-       });
-     }
-
      // 写真は鳥レコード全体とは別に更新時刻を持たせる。
      // これにより「PCで写真を削除した後、スマホでメモだけ編集した」
      // ような場合でも、古い写真が復活しない。
@@ -243,7 +223,14 @@ async function syncCloud(){
  try{
    const {data:row,error}=await supabaseClient.from(CLOUD_TABLE).select("records").eq("user_id",currentUser.id).maybeSingle();
    if(error)throw error;
-   if(row?.records)data=normalize(merge(normalize(data),normalize(row.records)));
+   if(row?.records){
+     // 起動時はクラウドを正本として読み込む。
+     // 端末側のlocalStorageには古い空欄データが残っている可能性があり、
+     // merge→pushCloudすると復元済みクラウドデータを空欄で上書きするため、
+     // 起動時の自動統合は行わない。
+     data=normalize(row.records);
+     localStorage.setItem(KEY,JSON.stringify(data));
+   }
 
    // 既存localStorage写真を初回同期時にStorageへ移行する。
    // PC側に写真が残っていてphotoPathが無い場合も、ここでクラウド化する。
@@ -312,76 +299,58 @@ async function getCloudPhotoUrl(b){
  return url;
 }
 async function repairBrokenPhotos(){
-  // v2.5: まず状態を画面に出し、Storageを調べてから修復する。
-  // 既存の鳥・行先データを上書きせず、写真Pathだけを必要最小限で直す。
-  if(!supabaseClient){
-    setStatus("☁️ Supabaseが初期化されていません","warn");
-    alert("Supabaseに接続できていません。ページを再読み込みして、クラウド設定を確認してください。");
-    return;
-  }
-  if(!currentUser){
-    setStatus("☁️ 未ログインのため写真診断できません","warn");
-    alert("クラウドにログインしてから『写真を診断・修復』を押してください。");
-    return;
-  }
+  // v2.7: 旧形式 b0.jpg と新形式 b0_xxxxx.jpg の両方を検索し、参照先だけを復旧。
+  if(!supabaseClient){setStatus("☁️ Supabaseが初期化されていません","warn");alert("Supabaseに接続できていません。再読み込みしてください。");return;}
+  if(!currentUser){setStatus("☁️ 未ログインのため写真診断できません","warn");alert("クラウドにログインしてから実行してください。");return;}
   setStatus("🛠️ 写真を診断中…");
   try{
     const prefix=currentUser.id+"/";
-    const {data:objects,error}=await supabaseClient.storage.from(PHOTO_BUCKET).list(prefix,{limit:1000});
+    const {data:objects,error}=await supabaseClient.storage.from(PHOTO_BUCKET).list(prefix,{limit:1000,sortBy:{column:"created_at",order:"asc"}});
     if(error)throw error;
-
-    const files=(objects||[]).filter(o=>o && o.name && /\.jpg$/i.test(o.name));
-    const fileNames=new Set(files.map(o=>o.name));
+    const files=(objects||[]).filter(o=>o&&o.name&&/\.jpg$/i.test(o.name));
     const byBird=new Map();
+    const fileNames=new Set();
     for(const o of files){
-      // 旧形式 b0.jpg と、日時付き形式 b0_xxxxx.jpg の両方を認識する。
-      // 同じ鳥に複数ある場合は、名前順で最も新しい候補を優先する。
-      const m=o.name.match(/^(b\d+)(?:_([0-9a-z]+))?\.jpg$/i);
+      const filename=String(o.name).split("/").pop();
+      fileNames.add(filename);
+      // 初期ID b0〜b47。拡張子直前の任意の _英数字部分はアップロード時刻由来。
+      const m=filename.match(/^(b\d+)(?:_([0-9a-z]+))?\.jpg$/i);
       if(!m)continue;
       const birdId=m[1];
-      const path=prefix+o.name;
+      const candidate={name:filename,path:prefix+filename,suffix:m[2]||"",created:Date.parse(o.created_at||o.updated_at||"")||0};
       const old=byBird.get(birdId);
-      if(!old || o.name.localeCompare(old.name)>0) byBird.set(birdId,{name:o.name,path});
+      // 最終更新時刻を優先。時刻がない場合は36進数suffix、最後にファイル名で比較。
+      if(!old||candidate.created>old.created||(candidate.created===old.created&&(candidate.suffix>old.suffix||(candidate.suffix===old.suffix&&candidate.name>old.name))))byBird.set(birdId,candidate);
     }
-
-    let checked=0, broken=0, repaired=0, available=0;
+    let checked=0,broken=0,repaired=0,available=0,skipped=0;
     const detail=[];
     for(const b of data.birds){
-      // 削除を明示した写真は復活させない。写真Pathが空の旧データも診断対象。
-      if(b.photoDeletedAt)continue;
+      if(b.photoDeletedAt){skipped++;continue;}
       checked++;
       const currentPath=b.photoPath?storagePathFromPhotoPath(b.photoPath):"";
       const currentName=currentPath?currentPath.split("/").pop():"";
-      const currentExists=!!currentName && fileNames.has(currentName);
-      if(currentExists){
-        try{ b._photoUrl=await getCloudPhotoUrl(b); }catch(e){}
+      if(currentName&&fileNames.has(currentName)){
+        try{b._photoUrl=await getCloudPhotoUrl(b);}catch(e){}
         continue;
       }
       if(b.photoPath)broken++;
       const candidate=byBird.get(b.id);
-      if(candidate){
-        available++;
-        // Storage一覧に実在するファイルだけを候補にする。公開URLの生成だけでは存在確認にならない。
-        b.photoPath=candidate.path;
-        b.photoUpdatedAt=Date.now();
-        b.photoDeletedAt=0;
-        b.updatedAt=Date.now();
-        try{ b._photoUrl=await getCloudPhotoUrl(b); }catch(e){ b._photoUrl=""; }
-        repaired++;
-        detail.push(`✓ ${b.鳥名}: ${candidate.name}`);
-      }else if(b.photoPath){
-        detail.push(`× ${b.鳥名}: Storageに対応写真なし`);
-      }
+      if(!candidate){if(/^b\d+$/.test(String(b.id||"")))detail.push(`× ${b.鳥名} (${b.id}): 対応ファイルなし`);continue;}
+      available++;
+      // 既存ファイルを削除/上書きせず、鳥レコードのphotoPathだけを更新する。
+      b.photoPath=candidate.path;
+      b.photoUpdatedAt=candidate.created||Date.now();
+      b.photoDeletedAt=0;
+      b.updatedAt=Date.now();
+      try{b._photoUrl=await getCloudPhotoUrl(b);}catch(e){b._photoUrl="";}
+      repaired++;
+      detail.push(`✓ ${b.鳥名} (${b.id}) ← ${candidate.name}`);
     }
-
     localStorage.setItem(KEY,JSON.stringify(data));
-    if(repaired){
-      // 写真Pathだけを直した結果をクラウドへ保存
-      await pushCloud();
-    }
+    if(repaired)await pushCloud();
     render();
-    const msg=`写真診断完了\n\nStorage内の写真: ${files.length}件\n登録済み写真を確認: ${checked}件\n壊れた参照: ${broken}件\n修復できた写真: ${repaired}件\n対応候補あり: ${available}件`;
-    setStatus(repaired?`☁️ 写真を${repaired}件修復しました`:`☁️ 写真診断完了（修復 ${repaired}件）`,"ok");
+    const msg=`写真診断完了\n\nStorage内の写真: ${files.length}件\n確認した鳥: ${checked}件\n壊れた参照: ${broken}件\n復旧した参照: ${repaired}件\n候補が見つかった鳥: ${available}件\n削除済みとして除外: ${skipped}件`;
+    setStatus(repaired?`☁️ 写真参照を${repaired}件修復しました`:"☁️ 写真診断完了（修復 0件）","ok");
     alert(msg+(detail.length?`\n\n詳細:\n${detail.join("\n")}`:""));
   }catch(e){
     console.error("MY BIRD BOOK photo diagnostic:",e);
