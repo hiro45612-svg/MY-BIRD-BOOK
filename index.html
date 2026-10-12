@@ -315,19 +315,25 @@ async function repairBrokenPhotos(){
     if(error)throw error;
     const files=(objects||[]).filter(o=>o&&o.name&&/\.jpg$/i.test(o.name));
     const byBird=new Map();
+    const filesByBird=new Map();
     const fileNames=new Set();
+    const fileByName=new Map();
     for(const o of files){
       const filename=String(o.name).split("/").pop();
       fileNames.add(filename);
-      // 初期ID b0〜b47。拡張子直前の任意の _英数字部分はアップロード時刻由来。
+      const candidate={name:filename,path:prefix+filename,suffix:(filename.match(/_(.+)\.jpg$/i)||[])[1]||"",created:Date.parse(o.created_at||o.updated_at||"")||0};
+      fileByName.set(filename,candidate);
+      // 旧形式と追加写真を含む、鳥IDごとの全ファイルを保持する。
       const m=filename.match(/^(b\d+)(?:_([0-9a-z]+))?\.jpg$/i);
       if(!m)continue;
       const birdId=m[1];
-      const candidate={name:filename,path:prefix+filename,suffix:m[2]||"",created:Date.parse(o.created_at||o.updated_at||"")||0};
+      candidate.suffix=m[2]||"";
+      if(!filesByBird.has(birdId))filesByBird.set(birdId,[]);
+      filesByBird.get(birdId).push(candidate);
       const old=byBird.get(birdId);
-      // 最終更新時刻を優先。時刻がない場合は36進数suffix、最後にファイル名で比較。
       if(!old||candidate.created>old.created||(candidate.created===old.created&&(candidate.suffix>old.suffix||(candidate.suffix===old.suffix&&candidate.name>old.name))))byBird.set(birdId,candidate);
     }
+    for(const arr of filesByBird.values())arr.sort((a,b)=>a.created-b.created||a.name.localeCompare(b.name));
     let checked=0,broken=0,repaired=0,available=0,skipped=0;
     const detail=[];
     for(const b of data.birds){
@@ -335,28 +341,39 @@ async function repairBrokenPhotos(){
       checked++;
       const currentPath=b.photoPath?storagePathFromPhotoPath(b.photoPath):"";
       const currentName=currentPath?currentPath.split("/").pop():"";
+      const candidates=filesByBird.get(b.id)||[];
+      const usedNames=new Set();
+      // 旧形式の代表写真を先に照合。Storage上に存在する参照は変更しない。
       if(currentName&&fileNames.has(currentName)){
+        usedNames.add(currentName);
         try{b._photoUrl=await getCloudPhotoUrl(b);}catch(e){}
-        continue;
+      }else if(b.photoPath){
+        broken++;
+        const candidate=byBird.get(b.id);
+        if(candidate){b.photoPath=candidate.path;usedNames.add(candidate.name);b.photoUpdatedAt=candidate.created||b.photoUpdatedAt||Date.now();try{b._photoUrl=await getCloudPhotoUrl(b);}catch(e){b._photoUrl="";}repaired++;detail.push(`✓ ${b.鳥名} 既存写真 ← ${candidate.name}`);}
       }
-      if(b.photoPath)broken++;
-      const candidate=byBird.get(b.id);
-      if(!candidate){if(/^b\d+$/.test(String(b.id||"")))detail.push(`× ${b.鳥名} (${b.id}): 対応ファイルなし`);continue;}
-      available++;
-      // 既存ファイルを削除/上書きせず、鳥レコードのphotoPathだけを更新する。
-      b.photoPath=candidate.path;
-      b.photoUpdatedAt=candidate.created||Date.now();
-      // 写真登録日が空欄の場合のみStorage作成日を補完。既存の日付は上書きしない。
-      // Storage作成日は実際の撮影日/図鑑登録日と一致するとは限らないため、推定値として扱う。
-      if(!b.photoDate && candidate.created){
-        const d=new Date(candidate.created);
-        if(!Number.isNaN(d.getTime())) b.photoDate=d.toISOString().slice(0,10);
+      // 追加写真も1枚ずつ照合する。ファイルが残っていれば参照先のみを直す。
+      for(const ph of (Array.isArray(b.photos)?b.photos:[])){
+        const phPath=ph.photoPath?storagePathFromPhotoPath(ph.photoPath):"";
+        const phName=phPath?phPath.split("/").pop():"";
+        if(phName&&fileNames.has(phName)){
+          usedNames.add(phName);
+          try{const url=await getCloudPhotoUrl({photoPath:ph.photoPath});if(url)ph._photoUrl=url;}catch(e){console.warn("additional photo URL failed",b.鳥名,ph.id,e.message)}
+          continue;
+        }
+        if(ph.photoPath)broken++;
+        // パスだけが古い場合に限り、同じ鳥IDの未使用ファイルを登録時刻に近い順で候補化。
+        const remaining=candidates.filter(c=>!usedNames.has(c.name));
+        if(!remaining.length)continue;
+        const targetTime=Number(ph.updatedAt||0);
+        remaining.sort((a,b)=>Math.abs((a.created||0)-targetTime)-Math.abs((b.created||0)-targetTime));
+        const candidate=remaining[0];
+        if(!candidate)continue;
+        ph.photoPath=candidate.path;ph.updatedAt=ph.updatedAt||candidate.created||Date.now();usedNames.add(candidate.name);
+        try{ph._photoUrl=await getCloudPhotoUrl({photoPath:ph.photoPath});}catch(e){ph._photoUrl="";}
+        repaired++;available++;detail.push(`✓ ${b.鳥名} 追加写真 ← ${candidate.name}`);
       }
-      b.photoDeletedAt=0;
-      b.updatedAt=Date.now();
-      try{b._photoUrl=await getCloudPhotoUrl(b);}catch(e){b._photoUrl="";}
-      repaired++;
-      detail.push(`✓ ${b.鳥名} (${b.id}) ← ${candidate.name}`);
+      if(!currentName&&!b.photoPath&&!candidates.length&&/^b\d+$/.test(String(b.id||"")))detail.push(`× ${b.鳥名} (${b.id}): 対応ファイルなし`);
     }
     localStorage.setItem(KEY,JSON.stringify(data));
     if(repaired)await pushCloud();
