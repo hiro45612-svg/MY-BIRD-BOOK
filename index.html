@@ -374,29 +374,36 @@ async function hydrateCloudPhotos(){
  if(!currentUser)return;
  let changed=false;
  for(const b of data.birds){
+   // 既存の代表写真（旧形式）を読み込む
    if(b.photoPath){
      try{
        const url=await getCloudPhotoUrl(b);
        if(url){b._photoUrl=url;changed=true}
      }catch(e){
        console.warn("photo load failed",b.鳥名,e.message);
-       // PC等に元画像(base64)が残っている場合は、壊れたStorage参照を自動修復する。
-       if(currentUser && b.photo){
+       // PC等に元画像(base64)が残っている場合だけ参照を修復する。
+       if(b.photo){
          try{
            const oldPath=b.photoPath;
            const newPath=await uploadPhoto(b.id,b.photo,oldPath);
-           b.photoPath=newPath;
-           b.photoUpdatedAt=Date.now();
-           b.photoDeletedAt=0;
-           b.updatedAt=Date.now();
-           b._photoUrl=await getCloudPhotoUrl(b);
-           changed=true;
-         }catch(re){ console.warn("auto photo repair failed",b.鳥名,re.message); }
+           b.photoPath=newPath;b.photoUpdatedAt=Date.now();b.photoDeletedAt=0;b.updatedAt=Date.now();
+           b._photoUrl=await getCloudPhotoUrl(b);changed=true;
+         }catch(re){console.warn("auto photo repair failed",b.鳥名,re.message)}
        }
      }
    }
+   // 追加写真も、保存されたStorageパスから表示用の公開URLを毎回復元する。
+   // cloudPayloadではphoto(base64)と_photoUrlを除外するため、この処理がないと
+   // 再読み込み後に相対パスを画像URLとして扱って表示できなくなる。
+   for(const ph of (Array.isArray(b.photos)?b.photos:[])){
+     if(!ph.photoPath)continue;
+     try{
+       const url=await getCloudPhotoUrl({photoPath:ph.photoPath});
+       if(url && ph._photoUrl!==url){ph._photoUrl=url;changed=true}
+     }catch(e){console.warn("additional photo load failed",b.鳥名,ph.id,e.message)}
+   }
  }
- if(changed)render();
+ if(changed){localStorage.setItem(KEY,JSON.stringify(data));render();}
 }
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
 
